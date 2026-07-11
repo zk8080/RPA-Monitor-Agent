@@ -105,7 +105,12 @@ pm2 logs rpa-monitor-agent
 | `rpaSkillPath` | rpa-skill 路径 | 服务器上要存在 |
 | `llmBaseUrl` / `llmApiKey` / `llmModel` | 通用 LLM（OpenAI 兼容） | 可选；无 apiKey 则纯规则 |
 | `llmApiStyle` | `openai`（默认）或 `anthropic` | 三方中转一般用 openai |
+| `llmTimeoutMs` | LLM 超时 ms | 默认 **600000**（10 分钟） |
+| `pollLookbackHours` | 感知时间窗（小时） | 默认 **24** |
+| `pollMaxPages` | 时间窗内最多翻页 | 默认 50 |
+| `shadowbotUserId` / `shadowbotUsersRoot` | 本机流程自动发现 | Windows 有客户端时可填 userId 固定账号 |
 | （兼容）`anthropicApiKey` | 旧字段，仍可读 | 建议迁到 llm* |
+
 
 | `DATA_DIR` 环境变量 | Memory 目录 | 默认真仓库 `data/`；可指到数据盘 |
 
@@ -115,9 +120,11 @@ pm2 logs rpa-monitor-agent
 YD_ACCESS_KEY_ID / YD_ACCESS_KEY_SECRET
 YD_ROBOT_CLIENT_UUID / YD_JOB_SIZE
 RPA_SKILL_PATH
-LLM_BASE_URL / LLM_API_KEY / LLM_MODEL / LLM_API_STYLE
+LLM_BASE_URL / LLM_API_KEY / LLM_MODEL / LLM_API_STYLE / LLM_TIMEOUT_MS
+POLL_LOOKBACK_HOURS / POLL_MAX_PAGES
 HEALTH_PORT / DATA_DIR
 ```
+
 
 
 ---
@@ -136,7 +143,8 @@ curl -s http://127.0.0.1:8787/health
 |------|------|
 | 提示 already_running | 看 `data/service.pid`；进程已死则删 pid 文件再启 |
 | 无新失败入队 | 查密钥、`robotClientUuid`、影刀侧是否有 error 运行 |
-| 诊断弱 / 无指令块 | 配置 `data/app-map.json`（robotUuid → xbotDir） |
+| 诊断弱 / 无指令块 | 确认本机存在 ShadowBot `users\*\apps\<uuid>\xbot_robot`；或写 app-map；或接受纯日志诊断 |
+
 | 磁盘涨 | `data/queue`、`data/kb`、`data/reports` 按需归档（后期可加清理策略） |
 
 日志：
@@ -175,7 +183,8 @@ curl -s http://127.0.0.1:8787/health
 1. `config.local.js` / 密钥 **不要进 git、不要打进公开镜像层**  
 2. `healthPort` 默认只绑本机逻辑使用；若对公网暴露须加防火墙/反向代理鉴权（当前 `/health` **无鉴权**）  
 3. `data/` 含失败日志摘要，按公司规范做盘权限  
-4. rpa-skill 与 app-map 指向的流程目录：服务器只读即可  
+4. rpa-skill 路径只读；流程目录优先本机 ShadowBot 自动发现，app-map 仅覆盖  
+
 
 ---
 

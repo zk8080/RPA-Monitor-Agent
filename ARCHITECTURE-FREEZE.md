@@ -132,7 +132,9 @@
 
 - Runner 在 **M1-min** 用 **playbook**（固定 tool 序 + 一次/少次模型调用），不必一上来完全自主 tool-use。  
 - `maxToolRounds` 可先设低（如 2～4）。  
-- 无 app-map 时降级为 remark/log 诊断，`confidence` 下调。  
+- 无本地 xbot_robot 时降级为 remark/log 诊断，`confidence` 下调。  
+- **resolve_app** 默认自动扫描 `%LOCALAPPDATA%\ShadowBot\users\*\apps\<robotUuid>\xbot_robot`。  
+
 - `develop` / `maintain` skill 仅占位（路由拒绝并提示未实现即可）。  
 - 紧急告警旁路不经完整 diagnose（仍须写 `data/alerts`，规则确定性）。
 
@@ -252,7 +254,8 @@ node monitor/report.js [--date YYYY-MM-DD]
 | `data/kb/KB-*.json` | 长期记忆：根因与方案 | diagnose（及人工确认流） |
 | `data/alerts/*` | 紧急旁路事件 | poll 规则 |
 | `data/reports/*` | 对外产出 | report / 调度 |
-| `data/app-map.json` | 应用 → 本地流程映射 | 人工（后期可半自动） |
+| `data/app-map.json` | 可选：robotUuid → xbotDir 手工覆盖 | 默认由 ShadowBot 自动发现，非必须 |
+
 
 **冻结：**
 
@@ -268,18 +271,12 @@ node monitor/report.js [--date YYYY-MM-DD]
 
 | 步 | 交付 | 架构检查（不通过 = 返工） |
 |----|------|---------------------------|
-| S0 | 方案 + OpenAPI 验证 | ✅ 已完成 |
-| S1 | `lib/yingdao.js`；verify 改依赖 lib | 无第二套 HTTP 客户端分叉 |
-| S2 | `lib/fingerprint.js` | 导出形状可被 tool 注册 |
-| S3 | `poll.js` + cursor + queue | poll 薄；只调 lib；queue 为 Memory |
-| **S3.5** | **`lib/tools.js` 注册表 + `lib/agent-runner.js` 薄壳 + `agent.js` skill 路由** | **产品身份落桩**：`agent.js diagnose --help` 存在；未知 skill 有明确错误；可先无模型 |
-| S4 | `lib/rpa.js` + app-map | 经 tool 暴露，非入口内联 require 一堆脚本 |
-| S5 | `lib/kb.js` | search/write 可注册为 tool |
-| **S6** | **M1-min diagnose 闭环** | 见 §6.2 清单；**此为第一个可宣讲 Agent 演示点** |
-| S7 | `diagnose --queue` | 与单条 diagnose 同一 runner |
-| S8 | `report.js` | 读 Memory，不重算诊断逻辑 |
-| **S9** | `service.js` | **仅包装**已有 poll + runner + report；无新业务分叉 |
+| S0–S9 | 最小闭环 + 部署 | ✅ 已实现（见 TECH-DESIGN 当前进度） |
+| S4 | `lib/rpa.js` | 自动 ShadowBot 路径 + 可选 app-map |
+| S6 | diagnose playbook | 规则 ± LLM ± rpa-skill 读块 |
+| S8 | `report.js` | **本轮** findings，不展示历史 occurrence |
 | S10 | M3 增强 | 不破坏 H1–H10 |
+
 
 **顺序铁律：**
 

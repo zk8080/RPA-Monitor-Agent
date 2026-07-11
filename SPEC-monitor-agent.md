@@ -114,16 +114,17 @@
 
 **职责：** 对队列中的失败做结构化诊断（根因 + 定位 + 修复方向）。
 
-**诊断链路（runner + tools，示意）：**
+**诊断链路（runner + tools，与实现对齐）：**
 ```
 错误指纹 + sampleJobUuid + robotUuid
   ->（按需）search_logs 补全 flowName / lineNumber / text
-  ->（按需）resolve app-map → understand / load_blocks
-  -> kb_search：命中则附带历史方案
-  -> 结合错误类型 + 流程上下文给出根因 + 修复方向
+  -> resolve_app：ShadowBot 本机自动 xbot_robot（app-map 可选覆盖）
+  ->（有目录时）understand / load_blocks（rpa-skill 只读）
+  -> kb_search：命中则附带历史方案（不自动当最终结论）
+  -> 规则诊断 ± 可选 LLM → 根因 + 修复方向（可含真实指令名）
   -> kb_write：新建或更新条目
-  -> 输出结构化诊断结果
 ```
+
 
 日志已带 `flowName` + `lineNumber`（见 7.3），**无需 text 语义匹配才能定位子流程行号**。
 

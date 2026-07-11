@@ -244,9 +244,12 @@ data/reports/YYYY-MM-DD.md
 | 最大 tool 轮次 | 默认 8，可配；M1-min 可更低 |
 | 同指纹 24h | 完整 diagnose 最多 1 次；再次出现只累加 occurrence |
 | KB 高置信命中 | M3：可短路；M1 先实现 search + 附带历史；**未确认 KB 不自动当最终结论** |
-| 无 app-map | 允许降级：仅日志 + remark，`confidence` 下调，不阻塞整批 |
+| 无本地流程目录 | 允许降级：仅日志 + remark，`confidence` 下调，不阻塞整批 |
+| 有 xbot_robot | `resolve_app`（ShadowBot 自动发现优先）→ understand + load_blocks → 规则补指令名；可选 LLM 加深 |
 | 单 tool 失败 | 记入 notes，尝试其他路径，不整任务崩溃 |
 | 日志体积 | 入模前截断；脱敏 base64 / 过长路径（发票 PDF base64 已见） |
+| LLM | 可选；`llmTimeoutMs` 默认 600000；失败回落规则 |
+
 
 ### 3.6 与「固定流水线」的关系
 
@@ -274,16 +277,18 @@ data/reports/YYYY-MM-DD.md
 ### 4.2 流程
 
 ```
-1. 计算时间窗：现在 − pollLookbackHours（默认 24h）→ triggerTimeBegin/End
+1. 计算时间窗：现在 − pollLookbackHours（默认 24h）→ triggerTimeBegin/End（yyyy-MM-dd HH:mm:ss 本地时区）
 2. getToken（内存缓存）
-3. listJobs(triggerTimeBegin/End, size, robotClientUuid?, cursor 翻页直到不足一页)
+3. listJobs(triggerTimeBegin/End, size, robotClientUuid?, 翻页至不足一页；上限 pollMaxPages)
 4. 对每条失败记录：
    a. build_fingerprint（优先 remark，不足再 search_logs 补全）
-   b. 指纹已见 → occurrenceCount++，更新 lastSeen / sampleJobUuids
+   b. 指纹已见 → occurrenceCount++（queue 内部去重用，日报不展示）
    c. 紧急 → data/alerts/
-   d. 否则写入/更新 data/queue/<fingerprint>.json
-5. 更新 cursor.json（记录 lastPollAt 与时间窗，备查）
+   d. 写入/更新 data/queue/<fingerprint>.json
+   e. 记入本轮 lastPollFindings[{ fingerprint, count, jobUuid, ... }]
+5. 更新 cursor.json（时间窗 + lastScanned/lastFailed + lastPollFindings）
 ```
+
 
 
 ### 4.3 错误指纹
@@ -318,36 +323,27 @@ data/reports/YYYY-MM-DD.md
 
 ```
 RPA-Monitor-Agent/
-├── SPEC-monitor-agent.md
-├── TECH-DESIGN.md              # 本文件
-├── ARCHITECTURE-FREEZE.md      # 架构冻结 / 防漂
-├── CLAUDE.md
-├── README.md
+├── SPEC / TECH-DESIGN / ARCHITECTURE-FREEZE / DEPLOY / README / CLAUDE
+├── package.json                 # npm start / once / verify …
+├── deploy/                      # Windows / Linux systemd / PM2
 ├── monitor/
 │   ├── config.example.js
-│   ├── config.local.js         # gitignore
-│   ├── verify_openapi.js       # OpenAPI 链路验证（依赖 lib）
-│   ├── poll.js                 # 感知入口（薄）
-│   ├── agent.js                # Agent CLI：skill 路由（M1）
-│   ├── service.js              # 常驻 Runtime（M2）
-│   ├── report.js               # 日报渲染
+│   ├── config.local.js          # gitignore
+│   ├── verify_openapi.js
+│   ├── poll.js / agent.js / service.js / report.js
+│   ├── scan_shadowbot.js        # 本机 apps 扫描自检
+│   ├── test_fingerprint.js
 │   └── lib/
-│       ├── yingdao.js          # OpenAPI 客户端
-│       ├── fingerprint.js      # 错误指纹
-│       ├── rpa.js              # rpa-skill 适配
-│       ├── kb.js               # 知识库
-│       ├── tools.js            # Tool 注册表（必有概念）
-│       ├── agent-runner.js     # skill 执行（playbook 或 tool-loop）
-│       └── skills/             # 可选：每 skill 的 playbook/prompt
-│           └── diagnose.js
-└── data/                       # gitignore · Agent Memory
-    ├── cursor.json
-    ├── app-map.json
-    ├── queue/
-    ├── kb/
-    ├── alerts/
-    └── reports/
+│       ├── config.js · yingdao.js · fingerprint.js · memory.js
+│       ├── poll.js · rpa.js · kb.js · llm.js · report.js
+│       ├── tools.js · agent-runner.js · lock.js · cron.js
+│       └── skills/diagnose.js   # M1-min playbook
+└── data/                        # gitignore · Memory
+    ├── cursor.json              # 含 lastPollFindings
+    ├── queue/ · kb/ · alerts/ · reports/
+    └── app-map.json             # 可选手工覆盖（非必须）
 ```
+
 
 入口脚本保持**薄**：解析参数 → 调 lib / agent-runner。业务与 tool 实现不进入口文件。  
 命名与红线见 [ARCHITECTURE-FREEZE.md §4](ARCHITECTURE-FREEZE.md)。
@@ -371,25 +367,27 @@ async function searchLogs(token, jobUuid, { page, size }) -> { logs, page }
 ### 5.4 `lib/rpa.js`
 
 ```js
-const RPA = process.env.RPA_SKILL_PATH || cfg.rpaSkillPath || 'D:/RPA-Skill'
-
-function resolveXbotDir(robotUuid) -> path | null
-function understandFlow(xbotDir, flowName?) -> understand 输出
-function loadFlowBlocks(xbotDir, flowName, lineNumber?) -> blocks 上下文
+resolveXbotDir(robotUuid) → { mapped, xbotDir, source, ... }
+// 优先级：data/app-map.json 手工覆盖
+//       → %LOCALAPPDATA%/ShadowBot/users/<userId>/apps/<robotUuid>/xbot_robot 自动发现
+// 可选配置：shadowbotUsersRoot / shadowbotUserId
+understandFlow(xbotDir, flowName?)  // require rpa-skill understand
+loadFlowBlocks(xbotDir, flowName, lineNumber?)  // project_reader 邻近指令块
+scanLocalApps()  // 扫描本机 apps（scan_shadowbot.js）
 ```
 
-**app-map（`data/app-map.json`，前期人工维护）：**
+**本机路径约定（Windows 影刀客户端）：**
 
-```json
-{
-  "bd3b43b3-9fb2-4b94-896c-ab10d320b065": {
-    "name": "API-发票附件下载回传",
-    "xbotDir": "D:/path/to/xbot_robot"
-  }
-}
+```text
+%LOCALAPPDATA%\ShadowBot\users\<userId>\apps\<robotUuid>\xbot_robot
 ```
 
-未映射 → 诊断标注「未配置本地流程路径，仅基于日志/remark」，不阻塞。
+- **默认自动发现**，无需为每个应用手写 app-map  
+- `data/app-map.json` 仅作特殊路径覆盖  
+- 找不到目录 → 诊断降级为日志/remark，notes 说明  
+
+自检：`node monitor/scan_shadowbot.js [--robot <uuid>]`
+
 
 ### 5.5 `lib/kb.js`
 
@@ -399,47 +397,54 @@ function loadFlowBlocks(xbotDir, flowName, lineNumber?) -> blocks 上下文
 - 默认 `status: pending_review`；确认流后置
 - CF 同步：接口预留，M 前段只本地
 
-### 5.6 `lib/tools.js` + `lib/agent-runner.js`
+### 5.6 `lib/tools.js` + `lib/agent-runner.js` + `skills/diagnose.js`
 
-**tools.js（概念必有，可与 runner 同文件）：**
+**tools.js：** name / schema / handler / 可见 skill；`list_jobs` 仅 perception。
 
-- name / input schema / handler / 可见 skill 列表  
-- diagnose 不可见 `list_jobs`（主 loop）
+**agent-runner.js：** skill 路由；`diagnose` → playbook 或 `--queue` drain。
 
-**agent-runner.js：**
+**M1-min diagnose playbook（真实实现顺序）：**
 
-- 按 skill 装载 tools 与 playbook/loop 策略  
-- M1-min：playbook；M1-full：Messages API tool-use  
-- 强制最终结构化 JSON；轮次上限、超时、token/费用日志  
-- 写回 queue / kb
+```text
+queue_get / 构建 working
+  →（可选）search_logs + build_fingerprint
+  → kb_search（附带历史，不自动当结论）
+  → resolve_app（自动 xbot_robot）
+  → understand_flow / load_blocks（有 xbotDir 时，rpa-skill）
+  → buildRuleDiagnosis（规则；有焦点指令则写入 location/suggestion）
+  →（可选）LLM 增强（llm+rules；失败回落 rules）
+  → kb_write + queue diagnosed
+```
+
+rpa-skill **读流程上下文**，不单独生成修复文案；修复建议 = 规则 ± LLM，并引用真实指令名。
 
 ### 5.7 `agent.js`（CLI）
 
 ```bash
 node monitor/agent.js diagnose --job <jobUuid>
 node monitor/agent.js diagnose --fingerprint <fp>
-node monitor/agent.js diagnose --queue          # 消费未诊断队列
 node monitor/agent.js diagnose --queue --limit 5
-# 预留：develop / maintain → skill_not_implemented
+node monitor/agent.js diagnose --queue --limit 5 --no-llm   # 纯规则
+# develop / maintain → skill_not_implemented
 ```
 
 ### 5.8 `service.js`（M2）
 
-```js
-// 示意：只调度，不复制业务
-// schedule.every(pollInterval).do(pollOnce)
-// schedule.cron(diagnoseCron).do(() => runner.run('diagnose', { queue: true }))
-// schedule.cron(reportCron).do(reportOnce)
-// 可选 listen(healthPort) → /health
-// SIGINT/SIGTERM 优雅退出；pid/文件锁防双开 poll
-```
+- `node monitor/service.js` 常驻；`--once` 单轮 poll→diagnose→report  
+- `--llm` 诊断启用 LLM（默认偏规则）  
+- `pollIntervalMinutes` 周期 poll + drain  
+- `diagnoseCron` / `reportCron` 简易分时触发  
+- `healthPort` 默认 8787，仅 `127.0.0.1`  
+- `data/service.pid` 单实例锁  
 
 ### 5.9 `report.js`
 
-- 读当日 KB / 已诊断 queue
-- 按 SPEC 5.4 渲染 Markdown
-- 输出 `data/reports/YYYY-MM-DD.md` + stdout
-- 推群 / CF：hook 预留
+- **默认 scope=`poll_window`**：只展示 `cursor.lastPollFindings` 命中的指纹  
+- 失败条数 = 本轮 findings.count 之和 / lastFailed，**不展示** queue 历史 `occurrenceCount`  
+- `--scope calendar_day|all` 可选  
+- 输出 `data/reports/YYYY-MM-DD.md`  
+- diagnose **不会**自动写日报；需 `report.js` 或 service 流程  
+
 
 ---
 
@@ -447,10 +452,22 @@ node monitor/agent.js diagnose --queue --limit 5
 
 ### 6.1 状态文件
 
-**cursor.json**
+**cursor.json（实现字段）**
 ```json
-{ "lastNextId": "...", "lastPollAt": "2026-07-11T12:00:00+08:00" }
+{
+  "lastNextId": "...",
+  "lastPollAt": "2026-07-11T13:42:01.517Z",
+  "lastLookbackHours": 24,
+  "lastTriggerTimeBegin": "2026-07-10 21:42:01",
+  "lastTriggerTimeEnd": "2026-07-11 21:42:01",
+  "lastScanned": 13,
+  "lastFailed": 2,
+  "lastPollFindings": [
+    { "fingerprint": "...", "jobUuid": "...", "count": 1, "robotName": "..." }
+  ]
+}
 ```
+
 
 **queue/\<fingerprint\>.json**
 ```json
@@ -567,36 +584,35 @@ Memory 语义见 [ARCHITECTURE-FREEZE.md §7](ARCHITECTURE-FREEZE.md)。
 
 ```js
 module.exports = {
-  // 影刀
   accessKeyId: '...',
   accessKeySecret: '...',
-  robotClientUuid: '',        // 可选
-  size: 50,
+  robotClientUuid: '',        // 可选，限定机器人
+  size: 50,                   // 每页条数
+  pollLookbackHours: 24,      // 感知时间窗（小时）；0=不按时间
+  pollMaxPages: 50,
 
-  // rpa-skill
   rpaSkillPath: 'D:/RPA-Skill',
+  // shadowbotUsersRoot / shadowbotUserId 可选
 
-  // 通用 LLM（推荐）
-  llmBaseUrl: 'https://api.openai.com/v1',  // 或三方网关
-  llmApiKey: '',                            // 或 LLM_API_KEY
+  llmBaseUrl: 'https://api.openai.com/v1',
+  llmApiKey: '',
   llmModel: 'gpt-4o-mini',
-  llmApiStyle: 'openai',                    // openai | anthropic
-  // llm: { baseUrl, apiKey, model, apiStyle }, // 嵌套写法亦可
+  llmApiStyle: 'openai',      // openai | anthropic
+  llmTimeoutMs: 600000,
+
   maxToolRounds: 8,
-
-
-  // 运行时（M2）
   pollIntervalMinutes: 15,
   diagnoseCron: '0 9 * * *',
   reportCron: '5 9 * * *',
-  healthPort: 0,              // 0 = 不监听
-
-  // 后置
+  healthPort: 8787,           // 0=关闭；仅绑定 127.0.0.1
   alertWebhook: '',
 };
 ```
 
-优先级：**环境变量 > config.local.js > 默认值**。
+优先级：**环境变量 > config.local.js > 默认值**。  
+LLM 环境变量：`LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL` / `LLM_API_STYLE` / `LLM_TIMEOUT_MS`。  
+Poll：`POLL_LOOKBACK_HOURS` / `POLL_MAX_PAGES`。
+
 
 ---
 
@@ -610,35 +626,26 @@ module.exports = {
 
 | 步 | 里程碑 | 交付 | 验收 |
 |----|--------|------|------|
-| **S0** ✅ | 拆仓 + 方案 + OpenAPI 验证 | 本仓库 + verify 通过 | 已完成 |
-| **S1** | M0 tools：yingdao | `lib/yingdao.js`；verify 改用 lib | verify 仍通过 |
-| **S2** | M0 tools：fingerprint | `lib/fingerprint.js` | 真实 remark 指纹稳定 |
-| **S3** | M0：poll + cursor + queue | `poll.js` 薄入口 | 跑一次 queue 有指纹 |
-| **S3.5** | **Agent 身份落桩** | `tools` 注册表 + runner 薄壳 + `agent.js` skill 路由 | `diagnose --help`；未知 skill 明确错误；可先无模型 |
-| **S4** | M0 tools：rpa + app-map | `lib/rpa.js` | 已映射 app 打出 understand/blocks |
-| **S5** | M0 tools：kb | `lib/kb.js` | 可写可读可查 |
-| **S6** | **M1-min Diagnosis Skill** | runner 跑通 diagnose | **真实失败 → tools → 结构化诊断 → 写 KB**（playbook 可） |
-| **S7** | M1：队列消费 | `agent.js diagnose --queue` | 与单条同一 runner |
-| **S8** | 输出 | `report.js` | 符合 SPEC 5.4 的日报 md |
-| **S9** | **M2 运行时** | `service.js` 只调度已有能力 | 单进程常驻：poll + diagnose + 日报 |
-| **S10** | M3 增强 | KB-first、跨应用归并、分诊；可选 M1-full | 命中率与报告质量提升 |
-
-**关键顺序：**
-
-1. **S6（Agent 闭环）在 S9（服务）之前**——禁止先做空转调度壳。  
-2. **S3.5 不晚于 S5**——禁止 tool 齐了却没有 agent 入口与注册表。  
-3. **S6 可弱（M1-min），不可跳过**——跳过即产品退化为脚本集。
+| **S0** ✅ | 拆仓 + 方案 + OpenAPI 验证 | 本仓库 + verify | 已完成 |
+| **S1** ✅ | yingdao | `lib/yingdao.js` | verify 用 lib |
+| **S2** ✅ | fingerprint | `lib/fingerprint.js` | 夹具 + 真实 remark |
+| **S3** ✅ | poll + queue | 24h 时间窗 + findings | queue 有指纹 |
+| **S3.5** ✅ | Agent 落桩 | tools + runner + agent.js | skill 路由 |
+| **S4** ✅ | rpa | 自动 ShadowBot 路径 + understand/blocks | scan_shadowbot / diagnose 有 blocks |
+| **S5** ✅ | kb | `lib/kb.js` | 可写可读 |
+| **S6** ✅ | M1-min diagnose | playbook：规则 ± LLM ± rpa-skill | 结构化诊断写 KB |
+| **S7** ✅ | 队列消费 | `--queue --limit` | drain |
+| **S8** ✅ | report | 本轮 findings，无历史 occurrence 展示 | reports/*.md |
+| **S9** ✅ | service | 常驻 / --once / 锁 / health | 部署包装 |
+| **S10** | M3 增强 | KB-first、跨应用、分诊、M1-full | 待做 |
 
 ### 当前进度
 
-- 已完成：**S0–S9（M0 + M1-min + M2 最小闭环）+ 部署包装**
-  - S1–S3 感知：yingdao / fingerprint / poll + queue
-  - S3.5–S7 Agent：tools 注册表 / runner / rpa / kb / M1-min diagnose / queue 消费
-  - **S8** `report.js` → `data/reports/YYYY-MM-DD.md`
-  - **S9** `service.js`：调度 poll → diagnose → report；`--once` / 常驻；pid 锁；`/health`（默认 8787，仅 127.0.0.1）
-  - **部署**：`DEPLOY.md`、`package.json`、`deploy/windows/*`、`deploy/linux/*.service`、`deploy/ecosystem.config.cjs`
-- 生产主路径：**`npm start` / `node monitor/service.js`**（非手敲 poll/diagnose）
-- 下一步（可选）：app-map、LLM、S10 增强；Docker/K8s 按需
+- **已交付：** S0–S9 最小闭环 + 部署（`main` 已推远程时可同步）  
+- **生产主路径：** `npm start` / `node monitor/service.js [--once] [--llm]`  
+- **诊断形态：** 规则为主 + 可选 LLM + 有本机流程时 rpa-skill 读块  
+- **下一步（可选）：** S10；服务器无 ShadowBot 时的流程源码挂载；KB 确认流 UI  
+
 
 
 
@@ -670,20 +677,22 @@ module.exports = {
 | 分诊 | `fixOwner`: business / developer / known |
 | 对话式深挖 | 人对某条失败追问（可选） |
 | 修复可执行化 | 建议落到具体 block；自动改流程更后 + 审批闸门 |
-| app-map 半自动 | 影刀应用列表 + 本地目录扫描 |
+| app-map / 本机流程 | **默认 ShadowBot 自动发现**；app-map 仅覆盖；服务器无客户端时需挂载或降级 |
 | **develop / maintain skills** | 同一 Agent Runtime 扩展，接 rpa-skill；公司推广主叙事之一 |
+
 
 ---
 
 ## 十三、风险与待补
 
-1. **app-map 人工维护**：前期可接受；S4 至少映射 1 个真实 app 才能验证读流程  
-2. **flowName ↔ `.flow.json` 文件名**：S4 用 understand/project_reader 验证  
+1. **本机流程路径**：Windows 已自动发现；服务器/无 ShadowBot 时需共享盘或 app-map  
+2. **flowName ↔ `.flow.json`**：load_blocks 按 name/filename 匹配，异常命名需验证  
 3. **日志敏感/过大**：入模前截断脱敏  
-4. **Agent 成本与跑飞**：maxToolRounds、24h 同指纹 1 次、KB 复用  
-5. **tool-use / JSON 稳定性**：校验失败重试或降级 `pending_review`  
-6. **双开 poll**：M2 必须有锁；M1 前靠约定不并发  
-7. **架构漂移**：实现中用 [ARCHITECTURE-FREEZE §9](ARCHITECTURE-FREEZE.md) 走偏信号自检  
+4. **Agent 成本**：maxToolRounds、LLM 超时、同指纹可重复 diagnose（当前未强限制 24h 一次）  
+5. **LLM / JSON 稳定性**：校验失败或超时 → 规则回落 + notes  
+6. **双开 poll**：service.pid 锁  
+7. **架构漂移**：ARCHITECTURE-FREEZE §9  
+
 
 ---
 
@@ -704,14 +713,13 @@ module.exports = {
 
 ## 十五、下一步
 
-1. 实现前重读 [ARCHITECTURE-FREEZE.md](ARCHITECTURE-FREEZE.md) H1–H10  
-2. 按 §十从 **S1** 开工：`lib/yingdao.js`  
-3. 每步保持「可被 tool 注册」的导出形状  
-4. **S3.5 落桩 agent 入口**；**S6 为第一个可宣讲 Agent 演示点**（可为 M1-min）  
-5. S9 再谈挂机常驻与 Windows 服务化细节  
-6. 推广叙事口径见冻结清单 §10  
+1. 按需 S10（KB-first / 跨应用 / 分诊 / M1-full tool-use）  
+2. 服务器部署时明确流程源码来源（本机 ShadowBot / 共享目录 / 降级）  
+3. 运维：任务计划或 systemd 托管 `service.js`；关注 `/health`  
+4. 推广叙事见 [ARCHITECTURE-FREEZE §10](ARCHITECTURE-FREEZE.md)  
 
 ---
 
-*文档状态：Agent 导向技术方案 + 与架构冻结清单对齐。OpenAPI 事实与指纹/数据设计沿用验证结论。*  
+*文档状态：与 S0–S9 真实实现对齐（24h poll、ShadowBot 自动 resolve、M1-min 规则±LLM±rpa-skill、本轮日报）。*  
 *最后更新：2026-07-11*
+
