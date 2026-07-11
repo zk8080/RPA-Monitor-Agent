@@ -278,7 +278,8 @@ node monitor/report.js [--date YYYY-MM-DD]
 | S0–S9 | 最小闭环 + 部署 | ✅ |
 | S11–S16 | maintain 巡检 + py 受控修 | ✅（默认不 auto-apply） |
 | S4 / S6 / S8 | 见 TECH-DESIGN | ✅ |
-| S10 | M3 增强 | 待做 |
+| S10 / S17+ | 见 TECH-DESIGN §十五 backlog | 待做 |
+
 
 
 

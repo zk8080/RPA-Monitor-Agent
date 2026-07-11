@@ -230,14 +230,20 @@ maintain: {
 
 ---
 
-## 九、后续增强（非必须）
+## 九、后续增强（与 TECH-DESIGN §十五对齐）
 
-1. service：diagnose 后自动 **dry-run 存 patch**，仍不 apply  
-2. 更多 fixer；LLM 辅助 plan（复杂 py）  
-3. 同指纹验证闭环  
-4. maintain 内 tool-loop（更强自主，仍保留写盘闸门）  
+| 编号 | 方向 | 优先级 |
+|------|------|--------|
+| **S17** | diagnose/service 诊后自动 **dry-run 存 patch**（绝不 auto-apply） | P0 |
+| **S18** | 同指纹验证闭环（fixed / regressed / verified） | P0 |
+| **S19** | 更多 fixer + LLM 辅助 plan | P1 |
+| **S20** | 日报附带「可修候选 / 未处理 patch」 | P1 |
+| **S23** | maintain 可选 tool-loop（写盘仍白名单） | P3 |
+
+总表与验收标准见 [TECH-DESIGN.md §十五](TECH-DESIGN.md)。
 
 ---
 
-*文档状态：S11–S16 已实现；本文为实现对齐版。*  
+*文档状态：S11–S16 已实现；后续见 TECH-DESIGN §十五。*  
 *最后更新：2026-07-11*
+

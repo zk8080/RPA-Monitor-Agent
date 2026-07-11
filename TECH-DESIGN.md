@@ -654,7 +654,8 @@ Poll：`POLL_LOOKBACK_HOURS` / `POLL_MAX_PAGES`。
 | **S7** ✅ | 队列消费 | `--queue --limit` | drain |
 | **S8** ✅ | report | 本轮 findings，无历史 occurrence 展示 | reports/*.md |
 | **S9** ✅ | service | 常驻 / --once / 锁 / health | 部署包装 |
-| **S10** | M3 增强 | KB-first、跨应用、分诊、M1-full | 待做 |
+| **S10** | M3 产品增强 | 见 §十五路线图 | 待做 |
+| **S11–S16** ✅ | maintain | 巡检 + py 受控修 | 已交付 |
 
 ### 当前进度
 
@@ -663,14 +664,7 @@ Poll：`POLL_LOOKBACK_HOURS` / `POLL_MAX_PAGES`。
 - **维护主路径：** `agent.js maintain inspect|fix|rollback`（Agent skill / playbook）  
 - **写盘：** `maintain.autoFix.enabled` 默认 false；需 `--apply` 且配置允许  
 - **设计详述：** [MAINTAIN-DESIGN.md](MAINTAIN-DESIGN.md)  
-- **下一步（可选）：** S10 KB-first；service 诊后自动 dry-run 存 patch；更多 fixer  
-
-
-
-
-
-
-
+- **后续方向：** 见 **§十五 继续实现路线图**  
 
 ---
 
@@ -693,29 +687,27 @@ Poll：`POLL_LOOKBACK_HOURS` / `POLL_MAX_PAGES`。
 
 | 能力 | 说明 |
 |------|------|
-| KB-first | 仅 **confirmed** 高置信历史可短路 |
-| 跨应用归并 | `errorSignature` 相似 → 一条根因 + affectedApps |
-| 分诊 | `fixOwner`: business / developer / known |
-| 对话式深挖 | 人对某条失败追问（可选） |
-| 修复可执行化 | 建议落到具体 block；自动改流程更后 + 审批闸门 |
-| app-map / 本机流程 | **默认 ShadowBot 自动发现**；app-map 仅覆盖；服务器无客户端时需挂载或降级 |
+| KB-first | 仅 **confirmed** 高置信历史可短路（路线图 S10a） |
+| 跨应用归并 | `errorSignature` 归并 + affectedApps（S10b） |
+| 分诊 | `fixOwner`: business / developer / known（S10c） |
+| 对话式深挖 | 可选（S24） |
+| 修复可执行化 | maintain 白名单 py；元素/flow 块另立项 |
+| app-map / 本机流程 | **默认 ShadowBot 自动发现**；服务器策略见 S21 |
 | **maintain skill** | ✅ 巡检 + py 白名单补丁（playbook；默认不 apply） |
-| **develop skill** | 预留 |
-
-
+| **develop skill** | 预留（S22 骨架） |
 
 ---
 
 ## 十三、风险与待补
 
-1. **本机流程路径**：Windows 已自动发现；服务器/无 ShadowBot 时需共享盘或 app-map  
+1. **本机流程路径**：Windows 已自动发现；服务器/无 ShadowBot 时需共享盘或 app-map（S21）  
 2. **flowName ↔ `.flow.json`**：load_blocks 按 name/filename 匹配，异常命名需验证  
 3. **日志敏感/过大**：入模前截断脱敏  
-4. **Agent 成本**：maxToolRounds、LLM 超时、同指纹可重复 diagnose（当前未强限制 24h 一次）  
+4. **Agent 成本**：maxToolRounds、LLM 超时、同指纹可重复 diagnose  
 5. **LLM / JSON 稳定性**：校验失败或超时 → 规则回落 + notes  
 6. **双开 poll**：service.pid 锁  
 7. **架构漂移**：ARCHITECTURE-FREEZE §9  
-
+8. **自动修误用**：禁止 service 默认 apply；仅白名单 + 备份 + 回滚  
 
 ---
 
@@ -728,22 +720,75 @@ Poll：`POLL_LOOKBACK_HOURS` / `POLL_MAX_PAGES`。
 | 部署=永远 cron 短进程 | M0–M1 可用 CLI；**M2 起独立 Agent 服务** |
 | 模块划分 yingdao/fingerprint/rpa/kb | **全部保留，升级为 Agent tools** |
 | OpenAPI 验证结论 | **全部保留** |
-| （无） | **架构冻结清单**，防实现漂回脚本集 |
+| （无） | **架构冻结清单** + **maintain skill** |
 
-旧方案中仍正确且继续沿用的部分：分层原则、指纹设计、queue/kb 文件结构、紧急旁路、rpa-skill 只读、密钥约定、S1 起从 yingdao 抽取的实现顺序。
-
----
-
-## 十五、下一步
-
-1. 可选：S10（KB-first / 跨应用 / 分诊 / M1-full tool-use）  
-2. 可选：maintain 增强（更多 fixer、诊后 dry-run 钩子、验证闭环）  
-3. 服务器部署时明确流程源码来源（本机 ShadowBot / 共享目录 / 降级）  
-4. 运维托管 `service.js`；改代码仅经 maintain 闸门  
+旧方案中仍正确且继续沿用的部分：分层原则、指纹设计、queue/kb 文件结构、紧急旁路、rpa-skill 只读、密钥约定。
 
 ---
 
-*文档状态：S0–S9 + maintain S11–S16 实现对齐（playbook Agent；默认不 auto-apply）。*  
+## 十五、继续实现路线图（待做 backlog）
+
+> 原则：保持 playbook Agent + 写盘闸门；**service 永不默认 auto-apply 生产 py**。  
+> 推荐优先级 **P0 → P3**。
+
+### 15.1 优先级总表
+
+| 优先级 | 编号 | 方向 | 交付物 | 验收要点 |
+|--------|------|------|--------|----------|
+| **P0** | **S17** | 诊后自动 **dry-run 存 patch** | diagnose/service 钩子：`fixability=auto` 时只 createPatch，不 apply | 诊断后 `data/patches/` 有预览；xbot **未改** |
+| **P0** | **S18** | 修复验证闭环 | 同 fingerprint 是否复发；KB `fixed` / `regressed` | 修后 N 次 poll 无同指纹 → verified；复发提示 rollback |
+| **P1** | **S19** | 更多 py fixer + LLM plan | 空路径等模板；复杂函数 LLM 出 diff 仍经 py_compile | 夹具 + 1～2 真实样例 dry-run |
+| **P1** | **S20** | maintain 进入日报 | report 附「可自动修候选 / 未处理 patch」 | 日报一节可读 |
+| **P1** | **S10a** | KB-first 短路 | 仅 `confirmed` 高置信跳过完整 diagnose | 开关；未确认永不短路 |
+| **P2** | **S10b** | 跨应用归并 | `errorSignature` + affectedApps | 报告一条根因多 app |
+| **P2** | **S10c** | 分诊标签 | `fixOwner`: business / developer / known | 进 diagnosis + 报告 |
+| **P2** | **S21** | 服务器流程源码策略 | 无 ShadowBot：共享盘 / app-map / 降级 | DEPLOY 专节 + 配置 |
+| **P2** | **S22** | develop skill 骨架 | `agent.js develop` 路由细化 | 入口存在、不破坏现网 |
+| **P3** | **S23** | maintain tool-loop（可选） | 模型多步读 py/日志，写盘仍白名单 | opt-in；默认 playbook |
+| **P3** | **S24** | 对话式入口（可选） | 「修这个 fingerprint」→ 同一 runner | 不替代 CLI/service |
+
+### 15.2 P0 说明（建议下一迭代）
+
+**S17 诊后 dry-run（推荐先做）**
+
+```text
+diagnose 完成
+  → fixability==auto 且 fixTargets 含 python
+  → maintain plan（fixer）→ patch.create（dryRun=true）
+  → 日志：「已生成补丁预览 patch-xxx」
+  → 绝不自动 apply
+```
+
+配置建议：
+
+```js
+maintain: {
+  autoPlanOnDiagnose: false, // 默认关；打开仅 dry-run
+  autoFix: { enabled: false, classes: ['code_boundary', 'null_guard'] }
+}
+```
+
+**S18 验证闭环**
+
+- apply 后记 `patchId`、`status=fixed_pending_verify`  
+- 后续 poll 同 fingerprint 再出现 → `regressed` + 建议 rollback  
+- 连续 N 天未再出现 → `verified`  
+
+### 15.3 明确不做（除非单独立项）
+
+| 不做 | 原因 |
+|------|------|
+| service 默认 apply 改生产 xbot | 安全与合规 |
+| 元素选择器 / 任意 flow 块自动改 | 误伤面大 |
+| 无备份、无 class 白名单的 LLM 全项目改写 | 不可审计 |
+
+### 15.4 运维
+
+- 生产托管 `service.js`；改代码只经 `maintain fix --apply`  
+- 服务器无本机 ShadowBot 时走 **S21**  
+- 推广口径见 [ARCHITECTURE-FREEZE §10](ARCHITECTURE-FREEZE.md)  
+
+---
+
+*文档状态：S0–S9 + maintain S11–S16 已交付；§十五为继续实现 backlog。*  
 *最后更新：2026-07-11*
-
-

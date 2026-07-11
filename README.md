@@ -74,8 +74,27 @@ node monitor/test_maintain.js   # 单元自检（临时目录）
 |------|------|
 | S0–S9 监听诊断 Runtime | ✅ |
 | S11–S16 maintain 巡检 + py 受控修 | ✅ |
-| S10 M3（KB-first 等） | 未做 |
-| service 自动 apply | **不做默认**；可选后续 dry-run 钩子 |
+| S10 / S17+ 后续 | 见下表（**未做**） |
+| service 自动 apply | **永不默认**；可选 S17 仅 dry-run |
+
+## 继续实现方向（backlog）
+
+完整说明见 [TECH-DESIGN.md §十五](TECH-DESIGN.md)。摘要：
+
+| 优先级 | 编号 | 方向 |
+|--------|------|------|
+| **P0** | **S17** | 诊后自动 **dry-run 存 patch**（不写 xbot） |
+| **P0** | **S18** | 修复验证闭环（复发 / verified） |
+| **P1** | **S19** | 更多 py fixer + LLM plan |
+| **P1** | **S20** | maintain 候选进日报 |
+| **P1** | **S10a** | KB-first（仅 confirmed） |
+| **P2** | **S10b/c** | 跨应用归并、fixOwner 分诊 |
+| **P2** | **S21** | 服务器无 ShadowBot 时的源码策略 |
+| **P2** | **S22** | develop skill 骨架 |
+| **P3** | **S23/S24** | maintain tool-loop / 对话入口（可选） |
+
+**明确不做：** service 默认改生产 py；无闸门的 LLM 全量改流程。
+
 
 ## 依赖
 

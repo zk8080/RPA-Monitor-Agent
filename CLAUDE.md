@@ -65,7 +65,13 @@ D:\RPA-Monitor-Agent  消费：监听 OpenAPI + 诊断 Agent + 日报 / KB
 
 - ✅ S0–S9 + 部署  
 - ✅ S11–S16 maintain（巡检 + py 受控修；默认不 apply）  
-- ➡ 可选 S10、更多 fixer、诊后 dry-run 钩子  
+- ➡ **继续实现 backlog：** [TECH-DESIGN.md §十五](TECH-DESIGN.md)  
+  - **P0：** S17 诊后 dry-run 存 patch；S18 修复验证闭环  
+  - **P1：** S19 更多 fixer；S20 日报挂钩；S10a KB-first  
+  - **P2：** 跨应用 / fixOwner / 服务器源码策略 / develop 骨架  
+  - **P3：** tool-loop / 对话入口（可选）  
+  - **禁止：** service 默认 apply 生产 py  
+
 
 
 ## 已验证事实（OpenAPI）
