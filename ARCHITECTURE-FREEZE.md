@@ -15,7 +15,8 @@
 | 可以弱 | 不能弱 |
 |--------|--------|
 | 诊断深度、tool 轮次、归因文案质量 | 产品叫 Agent，入口与模块按 Agent 长 |
-| 先只实现 `diagnose` skill | Skills 扩展缝（develop / maintain）预留 |
+| 先只实现 `diagnose` skill | Skills：`diagnose` + **`maintain` 已实现**；`develop` 预留 |
+
 | M1 用 playbook 驱动代替自由探索 | 业务逻辑落在 lib tools + runner，不进薄入口 |
 | 日报 / webhook / CF 后置 | queue / kb / cursor 作为 Agent Memory 存在 |
 
@@ -70,9 +71,8 @@
 │  └──────────────────────────────────────────────────────┘ │
 │                          │                                 │
 │  ┌─ Skills（能力面，可扩展）────────────────────────────┐ │
-│  │  diagnose   ← 当前唯一实现目标                        │ │
-│  │  develop    ← 预留（接 rpa-skill 生成等）             │ │
-│  │  maintain   ← 预留（inspect / 巡检等）                │ │
+│  │  diagnose · maintain（已实现 playbook）               │ │
+│  │  develop（预留）                                      │ │
 │  └──────────────────────────────────────────────────────┘ │
 │                          │                                 │
 │  ┌─ Agent Runner（脑，可弱不可无）──────────────────────┐ │
@@ -113,7 +113,8 @@
 | H7 | **新能力默认以 Tool 形式出现**，并挂到注册表；禁止只在某个入口文件里写死一份 HTTP/读盘逻辑。 |
 | H8 | **诊断输出必须走结构化契约**（见 TECH-DESIGN §3.4），并具备写入 KB 的路径（可 `pending_review`）。 |
 | H9 | **CLI 与 Service 调用同一套 runner + tools**；禁止 Service 一套逻辑、CLI 另一套复制粘贴。 |
-| H10 | **Skills 路由预留**：入口形态为 `agent.js <skill> ...`（或等价），当前 skill=`diagnose`；禁止把入口写成死函数名且无法扩展第二 skill。 |
+| H10 | **Skills 路由**：`agent.js <skill> ...`；已实现 `diagnose`、`maintain`；禁止无法扩展第二 skill 的死入口。 |
+
 
 ### 3.2 明确禁止（实现红线）
 
@@ -135,8 +136,9 @@
 - 无本地 xbot_robot 时降级为 remark/log 诊断，`confidence` 下调。  
 - **resolve_app** 默认自动扫描 `%LOCALAPPDATA%\ShadowBot\users\*\apps\<robotUuid>\xbot_robot`。  
 
-- `develop` / `maintain` skill 仅占位（路由拒绝并提示未实现即可）。  
+- `develop` skill 可占位 not implemented；**maintain 已实现**（playbook；写盘默认关，须 --apply + 配置）。  
 - 紧急告警旁路不经完整 diagnose（仍须写 `data/alerts`，规则确定性）。
+
 
 **弱化边界：** 弱的是推理策略，不是「有没有 runner / tools / skill 入口 / 结构化 I/O」。
 
@@ -172,31 +174,32 @@
 | `list_jobs` | yingdao | **仅** poll / 调度感知；**不进** diagnose 主 loop |
 | `search_logs` | yingdao | diagnose；poll 补全指纹时也可 |
 | `build_fingerprint` | fingerprint | poll；diagnose 可校验 |
-| `resolve_app` | rpa | diagnose |
-| `understand_flow` | rpa | diagnose（及未来 maintain） |
-| `load_blocks` | rpa | diagnose |
-| `kb_search` / `kb_write` | kb | diagnose（及未来 skills） |
+| `resolve_app` | rpa | diagnose, maintain |
+| `understand_flow` / `load_blocks` | rpa | diagnose, maintain |
+| `inspect_project` / `read_project_file` | rpa | maintain（及 diagnose 可用） |
+| `kb_search` / `kb_write` | kb | diagnose, maintain |
 | `render_report` | report | 调度 / 显式 skill 步骤 |
+
 
 新增 tool：先补注册表与本文/TECH-DESIGN 清单，再写 handler。
 
 ### 4.3 CLI 形态（冻结）
 
 ```bash
-# Agent 主入口（skill 在前）
 node monitor/agent.js diagnose --job <jobUuid>
 node monitor/agent.js diagnose --fingerprint <fp>
 node monitor/agent.js diagnose --queue [--limit N]
 
-# 预留（可先打印 not implemented）
-node monitor/agent.js develop ...
-node monitor/agent.js maintain ...
+node monitor/agent.js maintain inspect --robot <uuid>
+node monitor/agent.js maintain fix --fingerprint <fp> [--apply]
+node monitor/agent.js maintain rollback --patch <id>
+node monitor/agent.js develop ...   # 预留
 
-# 感知 / 运行时（仍是同一产品，不是旁路项目）
 node monitor/poll.js [--once]
 node monitor/service.js
 node monitor/report.js [--date YYYY-MM-DD]
 ```
+
 
 ---
 
@@ -206,9 +209,10 @@ node monitor/report.js [--date YYYY-MM-DD]
 
 | Skill | 状态 | 目标 | 典型 tools |
 |-------|------|------|------------|
-| `diagnose` | **现在做** | 失败 → 根因/定位/建议 → KB | search_logs, resolve_app, understand_flow, load_blocks, kb_* |
-| `develop` | 预留 | 新开发/生成流程辅助 | 未来：rpa generate 等（只读接 skill 仓） |
-| `maintain` | 预留 | 巡检/结构风险/批量维护 | 未来：inspect, validate 等 |
+| `diagnose` | **已实现** | 失败 → 根因/定位/建议/分诊 → KB | search_logs, resolve_app, understand, load_blocks, kb_* |
+| `maintain` | **已实现** | 巡检报告；py 白名单补丁（默认 dry-run） | inspect_project, read_project_file, list_app_failures |
+| `develop` | 预留 | 新开发/生成流程辅助 | 未来 rpa generate |
+
 
 ### 5.2 Skill 契约（最小）
 
@@ -271,11 +275,11 @@ node monitor/report.js [--date YYYY-MM-DD]
 
 | 步 | 交付 | 架构检查（不通过 = 返工） |
 |----|------|---------------------------|
-| S0–S9 | 最小闭环 + 部署 | ✅ 已实现（见 TECH-DESIGN 当前进度） |
-| S4 | `lib/rpa.js` | 自动 ShadowBot 路径 + 可选 app-map |
-| S6 | diagnose playbook | 规则 ± LLM ± rpa-skill 读块 |
-| S8 | `report.js` | **本轮** findings，不展示历史 occurrence |
-| S10 | M3 增强 | 不破坏 H1–H10 |
+| S0–S9 | 最小闭环 + 部署 | ✅ |
+| S11–S16 | maintain 巡检 + py 受控修 | ✅（默认不 auto-apply） |
+| S4 / S6 / S8 | 见 TECH-DESIGN | ✅ |
+| S10 | M3 增强 | 待做 |
+
 
 
 **顺序铁律：**
@@ -303,7 +307,8 @@ node monitor/report.js [--date YYYY-MM-DD]
 
 **推荐表述：**
 
-> 我们交付的是 **RPA 监听诊断 Agent**：确定性感知影刀运行失败并入队，诊断技能通过 Tool 调用 OpenAPI 日志、流程解析（rpa-skill）与本地知识库，输出结构化根因与修复方向；同一 Runtime 可常驻运行，并预留开发/维护类技能扩展，形成 RPA 提效 Agent 平台能力。
+> 我们交付的是 **RPA 监听诊断与维护 Agent**：确定性感知运行失败并入队；diagnose skill 经 tools 调用 OpenAPI / rpa-skill / KB 输出结构化根因与分诊；maintain skill 提供结构巡检与 **受控 py 补丁**（默认预览、可回滚 apply）；同一 Runtime 可常驻，并预留 develop 扩展。
+
 
 **避免表述：**
 
@@ -329,6 +334,8 @@ TECH-DESIGN 已有正确方向；落地时以本文为 **guardrail**，避免「
 | 日期 | 变更 |
 |------|------|
 | 2026-07-11 | 初版：冻结 Agent 产品身份、硬边界、模块、skill、M1 两档、S3.5 检查点、宣讲口径 |
+| 2026-07-11 | maintain 已实现：更新 skill 表、CLI、H10、宣讲口径（playbook + 写盘闸门） |
+
 
 ---
 

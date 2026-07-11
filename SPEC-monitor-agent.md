@@ -25,7 +25,8 @@
 | 诊断 AI Skill | Tool-using 排查：日志 / 流程结构 / KB → 根因 + 修复方向 |
 | 记忆 | 本地知识库，可复用历史方案 |
 | 运行时 | CLI 可单次诊断；演进为可常驻的独立 Agent 服务 |
-| 扩展面 | 预留 develop / maintain 等 skill，形成 RPA 提效 Agent |
+| 扩展面 | **diagnose + maintain 已实现**；develop 预留，形成 RPA 提效 Agent |
+
 
 ### 与现有 dashboard 的本质区别
 

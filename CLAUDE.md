@@ -27,12 +27,15 @@
 
 | 主题 | 实现 |
 |------|------|
-| poll | 默认 **最近 24h**（`triggerTimeBegin/End`）；`lastPollFindings` 记本轮失败 |
-| resolve_app | **ShadowBot 自动路径** `%LOCALAPPDATA%\ShadowBot\users\*\apps\<uuid>\xbot_robot`；app-map 可选覆盖 |
-| diagnose | playbook：kb → resolve → understand/load_blocks → **规则** → 可选 **LLM** → kb_write |
-| report | 默认只报 **本轮 findings**；失败条数用本轮 count，**不展示**历史 occurrence |
-| LLM | `lib/llm.js`：baseUrl+apiKey+model；`llmTimeoutMs` 默认 600s |
-| service | `--once` / 常驻；默认 diagnose 偏规则，`--llm` 才调模型 |
+| poll | 默认 **最近 24h**；`lastPollFindings` |
+| resolve_app | ShadowBot 自动 `xbot_robot` |
+| diagnose | playbook：规则 ± LLM ± rpa-skill；**triage** 出 fixClass |
+| maintain | playbook skill：`inspect` / `fix`（默认 dry-run）/ `rollback` |
+| 写盘 | 仅 `maintain fix --apply` + autoFix 配置；**service 不自动改 py** |
+| report | 本轮 findings 条数，无历史 occurrence 展示 |
+| LLM | `lib/llm.js`；timeout 默认 600s |
+| 形态 | **Agent skills + tools**；CLI/service 为触发方式，非「散装脚本身份」 |
+
 
 ## 与 rpa-skill 的关系
 
@@ -54,12 +57,16 @@ D:\RPA-Monitor-Agent  消费：监听 OpenAPI + 诊断 Agent + 日报 / KB
    - `node monitor/agent.js diagnose --fingerprint <fp>`  
    - `node monitor/report.js`  
    - `node monitor/service.js --once`  
+   - `node monitor/agent.js maintain inspect --robot <uuid>`  
+   - `node monitor/test_maintain.js`  
 4. 密钥：`config.local.js` gitignore  
 
 ### 当前实现进度
 
-- ✅ S0–S9 + 部署（Windows/Linux/PM2）  
-- ➡ 可选 S10、服务器流程源码策略  
+- ✅ S0–S9 + 部署  
+- ✅ S11–S16 maintain（巡检 + py 受控修；默认不 apply）  
+- ➡ 可选 S10、更多 fixer、诊后 dry-run 钩子  
+
 
 ## 已验证事实（OpenAPI）
 

@@ -13,7 +13,8 @@
 ### 1.1 最终交付物定义
 
 > **RPA 诊断 AI Agent：确定性监听入队 + Tool-using Diagnosis Agent + 本地 KB 记忆 + 可常驻运行时。**  
-> 演进名：**RPA Efficiency Agent**（诊断 skill 之外预留 develop / maintain，见冻结清单 §5）。
+> 演进名：**RPA Efficiency Agent**（**diagnose + maintain 已实现**；develop 预留）。
+
 
 它回答的是 **WHY（根因）+ SO WHAT（怎么修）**，不重复造影刀 Dashboard（Dashboard 回答 WHAT）。
 
@@ -90,7 +91,8 @@
 │                          │ 写入 queue（Memory）                │
 │                          ▼                                     │
 │  ┌─ Skills + Agent Runner（脑，可弱不可无）─────────────────┐ │
-│  │  diagnose（现）· develop/maintain（预留）                 │ │
+│  │  diagnose · maintain（已实现）· develop（预留）           │ │
+
 │  │  Playbook 或 tool-loop → 结构化 JSON → KB                 │ │
 │  └──────────────────────────────────────────────────────────┘ │
 │  ┌─ Tools（手 · lib/* + 注册表）────────────────────────────┐ │
@@ -149,7 +151,9 @@ data/reports/YYYY-MM-DD.md
 
 ### 3.1 定位
 
-`diagnose` 是当前唯一实现的 **Skill**，是最终交付物的智能核心（演进后与 develop/maintain 并列）。  
+`diagnose` 与 **`maintain`** 均为 Runtime 上的 **Skill**（playbook 型弱脑 + tools）。  
+diagnose 负责听懂失败并分诊；maintain 负责巡检与受控补丁（默认不写盘）。
+  
 它不是「把日志塞进一次 prompt 的一次性脚本」，而是 **经 runner 调用 tools、产出结构化结果并写入 Memory** 的诊断技能：
 
 ```
@@ -233,9 +237,15 @@ data/reports/YYYY-MM-DD.md
   "relatedFingerprintHints": [],
   "kbAction": "create|update|reuse",
   "reusedKbId": null,
-  "notes": "可选：信息不足时的说明"
+  "notes": "可选：信息不足时的说明",
+  "fixClass": "code_boundary|null_guard|element|env|config|unknown",
+  "fixability": "auto|assisted|manual",
+  "fixTargets": []
 }
 ```
+
+`fixClass` / `fixability` / `fixTargets` 由 `lib/triage.js` 填充，供 **maintain fix** 消费；**diagnose 本身不写业务流程文件**。
+
 
 ### 3.5 Loop 控制与成本
 
@@ -425,8 +435,13 @@ node monitor/agent.js diagnose --job <jobUuid>
 node monitor/agent.js diagnose --fingerprint <fp>
 node monitor/agent.js diagnose --queue --limit 5
 node monitor/agent.js diagnose --queue --limit 5 --no-llm   # 纯规则
-# develop / maintain → skill_not_implemented
+# develop → skill_not_implemented
+# maintain：
+#   node monitor/agent.js maintain inspect --robot <uuid>
+#   node monitor/agent.js maintain fix --fingerprint <fp> [--apply]
+#   node monitor/agent.js maintain rollback --patch <id>
 ```
+
 
 ### 5.8 `service.js`（M2）
 
@@ -641,10 +656,13 @@ Poll：`POLL_LOOKBACK_HOURS` / `POLL_MAX_PAGES`。
 
 ### 当前进度
 
-- **已交付：** S0–S9 最小闭环 + 部署（`main` 已推远程时可同步）  
-- **生产主路径：** `npm start` / `node monitor/service.js [--once] [--llm]`  
-- **诊断形态：** 规则为主 + 可选 LLM + 有本机流程时 rpa-skill 读块  
-- **下一步（可选）：** [MAINTAIN-DESIGN.md](MAINTAIN-DESIGN.md)（巡检 + py 受控自动修 S11+）；S10 KB-first；服务器流程源码挂载  
+- **已交付：** S0–S9 最小闭环 + **S11–S16 maintain**（巡检 + py 受控修复）+ 部署  
+- **生产主路径：** `npm start` / `service.js`（监听+诊断+日报；**不**默认改代码）  
+- **维护主路径：** `agent.js maintain inspect|fix|rollback`（Agent skill / playbook）  
+- **写盘：** `maintain.autoFix.enabled` 默认 false；需 `--apply` 且配置允许  
+- **设计详述：** [MAINTAIN-DESIGN.md](MAINTAIN-DESIGN.md)  
+- **下一步（可选）：** S10 KB-first；service 诊后自动 dry-run 存 patch；更多 fixer  
+
 
 
 
@@ -679,7 +697,9 @@ Poll：`POLL_LOOKBACK_HOURS` / `POLL_MAX_PAGES`。
 | 对话式深挖 | 人对某条失败追问（可选） |
 | 修复可执行化 | 建议落到具体 block；自动改流程更后 + 审批闸门 |
 | app-map / 本机流程 | **默认 ShadowBot 自动发现**；app-map 仅覆盖；服务器无客户端时需挂载或降级 |
-| **develop / maintain skills** | 同一 Agent Runtime 扩展，接 rpa-skill；公司推广主叙事之一 |
+| **maintain skill** | ✅ 巡检 + py 白名单补丁（playbook；默认不 apply） |
+| **develop skill** | 预留 |
+
 
 
 ---
@@ -714,13 +734,14 @@ Poll：`POLL_LOOKBACK_HOURS` / `POLL_MAX_PAGES`。
 
 ## 十五、下一步
 
-1. 按需 S10（KB-first / 跨应用 / 分诊 / M1-full tool-use）  
-2. 服务器部署时明确流程源码来源（本机 ShadowBot / 共享目录 / 降级）  
-3. 运维：任务计划或 systemd 托管 `service.js`；关注 `/health`  
-4. 推广叙事见 [ARCHITECTURE-FREEZE §10](ARCHITECTURE-FREEZE.md)  
+1. 可选：S10（KB-first / 跨应用 / 分诊 / M1-full tool-use）  
+2. 可选：maintain 增强（更多 fixer、诊后 dry-run 钩子、验证闭环）  
+3. 服务器部署时明确流程源码来源（本机 ShadowBot / 共享目录 / 降级）  
+4. 运维托管 `service.js`；改代码仅经 maintain 闸门  
 
 ---
 
-*文档状态：与 S0–S9 真实实现对齐（24h poll、ShadowBot 自动 resolve、M1-min 规则±LLM±rpa-skill、本轮日报）。*  
+*文档状态：S0–S9 + maintain S11–S16 实现对齐（playbook Agent；默认不 auto-apply）。*  
 *最后更新：2026-07-11*
+
 
