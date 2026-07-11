@@ -324,9 +324,10 @@ CF 承担两个角色（同空间不同目录）：
 |--------------------|---------------------|
 | `understand.js`（业务流程解析） | Agent tool：解析失败应用的流程结构 |
 | `block_library`（180 种指令块） | 错误日志 ↔ 指令块语义 |
-| `inspect.js`（技术结构巡检） | 可选 tool：结构风险；未来 maintain |
+| `inspect.js`（技术结构巡检） | maintain inspect / diagnose 可选 tool（结构风险） |
 | `generate` 等 | 未来 develop skill |
-| `validate.js`（流程校验） | 修复后验证（Phase 4） |
+| `validate.js`（流程校验） | maintain apply 后可选校验；修复验证（Phase 4） |
+
 
 本仓库侧沉淀（不回流 rpa-skill 除非另议）：
 - 错误指纹与入队

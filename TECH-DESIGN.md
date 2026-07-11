@@ -563,8 +563,10 @@ Memory 语义见 [ARCHITECTURE-FREEZE.md §7](ARCHITECTURE-FREEZE.md)。
 | `understand` | 流程结构与步骤语义 |
 | 读 flow / project_reader | lineNumber 附近指令块 |
 | `block_library` | 错误 ↔ 指令类型 |
-| `inspect` | 结构风险（可选 tool；未来 maintain） |
+| `inspect` | 结构巡检（maintain inspect 已用；diagnose 可选） |
 | `generate` 等 | 未来 develop skill，仍只读引用 |
+| `validate` | maintain apply 后可选项目校验 |
+
 
 路径：`RPA_SKILL_PATH` > `config.rpaSkillPath` > `D:/RPA-Skill`。
 
