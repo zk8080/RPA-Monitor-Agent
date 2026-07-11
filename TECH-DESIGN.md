@@ -644,7 +644,8 @@ Poll：`POLL_LOOKBACK_HOURS` / `POLL_MAX_PAGES`。
 - **已交付：** S0–S9 最小闭环 + 部署（`main` 已推远程时可同步）  
 - **生产主路径：** `npm start` / `node monitor/service.js [--once] [--llm]`  
 - **诊断形态：** 规则为主 + 可选 LLM + 有本机流程时 rpa-skill 读块  
-- **下一步（可选）：** S10；服务器无 ShadowBot 时的流程源码挂载；KB 确认流 UI  
+- **下一步（可选）：** [MAINTAIN-DESIGN.md](MAINTAIN-DESIGN.md)（巡检 + py 受控自动修 S11+）；S10 KB-first；服务器流程源码挂载  
+
 
 
 

@@ -17,7 +17,9 @@
 |------|------|
 | [SPEC-monitor-agent.md](SPEC-monitor-agent.md) | 产品设计 Spec |
 | [TECH-DESIGN.md](TECH-DESIGN.md) | **技术方案（与 S0–S9 实现对齐）** |
+| [MAINTAIN-DESIGN.md](MAINTAIN-DESIGN.md) | **maintain：巡检报告 + py 受控自动修（规划）** |
 | [ARCHITECTURE-FREEZE.md](ARCHITECTURE-FREEZE.md) | 架构冻结 / 防漂 |
+
 | [DEPLOY.md](DEPLOY.md) | 服务器部署 |
 | [CLAUDE.md](CLAUDE.md) | 开发指引 |
 
