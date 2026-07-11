@@ -1,14 +1,14 @@
 /**
- * Agent Runner：skill 路由 + diagnose playbook（M1-min）
- * CLI 与未来 service 共用；禁止平行 diagnose.js 业务栈。
+ * Agent Runner：skill 路由
  */
 
 const { listToolsForSkill } = require('./tools');
 const { loadConfig } = require('./config');
 const { runDiagnosePlaybook, drainQueue } = require('./skills/diagnose');
+const { runMaintain } = require('./skills/maintain');
 
-const IMPLEMENTED_SKILLS = new Set(['diagnose']);
-const RESERVED_SKILLS = new Set(['develop', 'maintain']);
+const IMPLEMENTED_SKILLS = new Set(['diagnose', 'maintain']);
+const RESERVED_SKILLS = new Set(['develop']);
 
 /**
  * @param {string} skill
@@ -24,7 +24,7 @@ async function runSkill(skill, input = {}, options = {}) {
       ok: false,
       code: 'skill_not_implemented',
       skill: name,
-      message: `skill "${name}" 已预留，尚未实现。当前仅支持: diagnose`,
+      message: `skill "${name}" 已预留，尚未实现。当前支持: diagnose, maintain`,
     };
   }
 
@@ -33,12 +33,11 @@ async function runSkill(skill, input = {}, options = {}) {
       ok: false,
       code: 'unknown_skill',
       skill: name,
-      message: `未知 skill: ${name}。可用: diagnose；预留: develop, maintain`,
+      message: `未知 skill: ${name}。可用: diagnose, maintain；预留: develop`,
     };
   }
 
   if (name === 'diagnose') {
-    // 批量队列消费
     if ((input.queue || input.fromQueue) && (input.limit > 0 || input.drain)) {
       const limit = input.limit > 0 ? input.limit : 5;
       return drainQueue(cfg, { limit, dryRun: options.dryRun || input.dryRun });
@@ -46,6 +45,10 @@ async function runSkill(skill, input = {}, options = {}) {
     return runDiagnosePlaybook(input, cfg, {
       dryRun: options.dryRun || input.dryRun,
     });
+  }
+
+  if (name === 'maintain') {
+    return runMaintain(input, cfg);
   }
 
   return {

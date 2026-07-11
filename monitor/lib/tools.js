@@ -125,8 +125,9 @@ const TOOLS = [
   },
   {
     name: 'resolve_app',
-    description: 'robotUuid → 本地 xbotDir（data/app-map.json）',
-    skills: ['diagnose'],
+    description: 'robotUuid → 本地 xbotDir（ShadowBot 自动发现 / app-map）',
+    skills: ['diagnose', 'maintain'],
+
     inputSchema: {
       type: 'object',
       properties: { robotUuid: { type: 'string' } },
@@ -156,7 +157,8 @@ const TOOLS = [
   {
     name: 'load_blocks',
     description: '读取 flowName 在 lineNumber 附近的指令块',
-    skills: ['diagnose'],
+    skills: ['diagnose', 'maintain'],
+
     inputSchema: {
       type: 'object',
       properties: {
@@ -194,7 +196,7 @@ const TOOLS = [
   {
     name: 'kb_write',
     description: '写入或更新知识库条目（默认 pending_review）',
-    skills: ['diagnose'],
+    skills: ['diagnose', 'maintain'],
     inputSchema: {
       type: 'object',
       properties: {
@@ -209,7 +211,73 @@ const TOOLS = [
       return kb.writeKb(cfg.dataDir, input);
     },
   },
+  {
+    name: 'inspect_project',
+    description: 'rpa-skill 结构巡检（只读）',
+    skills: ['maintain', 'diagnose'],
+    inputSchema: {
+      type: 'object',
+      properties: {
+        xbotDir: { type: 'string' },
+        flowName: { type: 'string' },
+      },
+      required: ['xbotDir'],
+    },
+    async handler(input, ctx) {
+      return rpa.inspectProject(input.xbotDir, input.flowName, { cfg: ctx.cfg || loadConfig() });
+    },
+  },
+  {
+    name: 'read_project_file',
+    description: '读取 xbot_robot 目录内文件（路径不得逃逸）',
+    skills: ['maintain', 'diagnose'],
+    inputSchema: {
+      type: 'object',
+      properties: {
+        xbotDir: { type: 'string' },
+        relativePath: { type: 'string' },
+      },
+      required: ['xbotDir', 'relativePath'],
+    },
+    async handler(input, ctx) {
+      return rpa.readProjectFile(input.xbotDir, input.relativePath, {
+        maxBytes: input.maxBytes,
+      });
+    },
+  },
+  {
+    name: 'list_app_failures',
+    description: '按 robotUuid 列出 queue 中失败条目',
+    skills: ['maintain', 'diagnose'],
+    inputSchema: {
+      type: 'object',
+      properties: {
+        robotUuid: { type: 'string' },
+        limit: { type: 'number' },
+      },
+    },
+    async handler(input, ctx) {
+      const cfg = ctx.cfg || loadConfig();
+      let items = memory.listQueueItems(cfg.dataDir);
+      if (input.robotUuid) {
+        items = items.filter((i) => i.robotUuid === input.robotUuid);
+      }
+      items.sort((a, b) => String(b.lastSeen || '').localeCompare(String(a.lastSeen || '')));
+      const limit = input.limit || 20;
+      return { count: items.length, items: items.slice(0, limit) };
+    },
+  },
+  {
+    name: 'scan_local_apps',
+    description: '扫描本机 ShadowBot apps',
+    skills: ['maintain'],
+    inputSchema: { type: 'object', properties: {} },
+    async handler(_input, ctx) {
+      return rpa.scanLocalApps(ctx.cfg || loadConfig());
+    },
+  },
 ];
+
 
 function getTool(name) {
   return TOOLS.find((t) => t.name === name) || null;

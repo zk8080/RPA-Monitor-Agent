@@ -7,6 +7,8 @@ const { invokeTool } = require('../tools');
 const memory = require('../memory');
 const kb = require('../kb');
 const llm = require('../llm');
+const { classifyFix } = require('../triage');
+
 
 
 /**
@@ -158,6 +160,7 @@ async function runDiagnosePlaybook(input, cfg, options = {}) {
     blocksContext,
     logs,
   });
+
 
   const llmClient = llm;
   if (llmClient.isLlmConfigured(cfg) && input.useLlm !== false) {
@@ -392,8 +395,10 @@ function buildRuleDiagnosis(working, ctx) {
     affectedBlocks: focusBlock ? [focusBlock.name] : [],
     notes,
     source: 'rules',
+    ...classifyFix(working, { logs: ctx.logs, blocksContext, appInfo }),
   };
 }
+
 
 async function enhanceWithLlm(base, working, ctx) {
   const { cfg, history, flowContext, blocksContext } = ctx;
@@ -445,10 +450,19 @@ rootCause, location, suggestion, confidence(0-1), errorCategory(element|file|log
     confidence: typeof parsed.confidence === 'number' ? parsed.confidence : base.confidence,
     errorCategory: parsed.errorCategory || base.errorCategory,
     notes: parsed.notes || base.notes,
+    // 保留规则分诊字段（LLM 不覆盖）
+    fixClass: base.fixClass,
+    fixability: base.fixability,
+    fixTargets: base.fixTargets,
+    relatedFingerprintHints: base.relatedFingerprintHints,
+    kbAction: base.kbAction,
+    reusedKbId: base.reusedKbId,
+    affectedBlocks: base.affectedBlocks,
     llmProvider: `${resolved.apiStyle}@${resolved.baseUrl}`,
     llmModel: resolved.model,
   };
 }
+
 
 
 

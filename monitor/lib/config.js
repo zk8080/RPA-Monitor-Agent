@@ -129,7 +129,8 @@ function loadConfig() {
         ),
       ),
       10,
-    ) || 60000;
+    ) || 600000;
+
 
   return {
     ...DEFAULTS,

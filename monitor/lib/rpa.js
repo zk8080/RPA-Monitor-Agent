@@ -409,6 +409,102 @@ function summarizeInputs(inputs, maxKeys = 6) {
   return out;
 }
 
+function requireInspect(cfg) {
+  const skillPath = getRpaSkillPath(cfg);
+  const p = path.join(skillPath, 'scripts', 'inspect.js');
+  if (!fs.existsSync(p)) throw new Error(`rpa-skill inspect 不存在: ${p}`);
+  // eslint-disable-next-line import/no-dynamic-require, global-require
+  return require(p);
+}
+
+function requireValidate(cfg) {
+  const skillPath = getRpaSkillPath(cfg);
+  const p = path.join(skillPath, 'scripts', 'validate.js');
+  if (!fs.existsSync(p)) throw new Error(`rpa-skill validate 不存在: ${p}`);
+  // eslint-disable-next-line import/no-dynamic-require, global-require
+  return require(p);
+}
+
+/**
+ * 结构巡检（rpa-skill inspect.analyze）
+ */
+function inspectProject(xbotDir, flowName, opts = {}) {
+  const cfg = opts.cfg || loadConfig();
+  if (!xbotDir || !fs.existsSync(xbotDir)) {
+    return { ok: false, reason: 'xbotDir_missing', xbotDir: xbotDir || null };
+  }
+  try {
+    const { readProject } = requireProjectReader(cfg);
+    const { analyze } = requireInspect(cfg);
+    const project = readProject(xbotDir, flowName || '');
+    const report = analyze(project);
+    // 压缩大字段
+    return {
+      ok: true,
+      projectName: report.projectName,
+      xbotDir: report.xbotDir,
+      flowCount: report.flowCount,
+      totalFlowCount: report.totalFlowCount,
+      risks: report.risks || [],
+      unknownBlocks: (report.unknownBlocks || []).slice(0, 30),
+      flows: (report.flows || []).slice(0, 40),
+      callStats: report.callGraph?.stats || null,
+      missingPy: (report.callGraph?.codeModules || [])
+        .filter((m) => !m.pyExists)
+        .map((m) => m.filename)
+        .slice(0, 20),
+      unreferencedFlows: (report.callGraph?.unreferencedFlows || []).slice(0, 20),
+      validationErrors: report.validation?.errors || [],
+      validationWarnings: report.validation?.warnings || [],
+      warnings: report.warnings || [],
+      errors: report.errors || [],
+    };
+  } catch (e) {
+    return { ok: false, reason: 'inspect_error', error: e.message };
+  }
+}
+
+/**
+ * 读取项目内文件（限制在 xbotDir 下）
+ */
+function readProjectFile(xbotDir, relativePath, opts = {}) {
+  if (!xbotDir || !relativePath) {
+    return { ok: false, reason: 'missing_args' };
+  }
+  const maxBytes = opts.maxBytes || 200000;
+  const abs = path.resolve(xbotDir, relativePath);
+  const root = path.resolve(xbotDir);
+  if (!abs.startsWith(root)) {
+    return { ok: false, reason: 'path_escape' };
+  }
+  if (!fs.existsSync(abs)) {
+    return { ok: false, reason: 'not_found', absolutePath: abs };
+  }
+  const stat = fs.statSync(abs);
+  if (!stat.isFile()) return { ok: false, reason: 'not_file' };
+  if (stat.size > maxBytes) {
+    return { ok: false, reason: 'too_large', size: stat.size, maxBytes };
+  }
+  const content = fs.readFileSync(abs, 'utf8');
+  return {
+    ok: true,
+    relativePath: path.relative(root, abs).replace(/\\/g, '/'),
+    absolutePath: abs,
+    content,
+    size: stat.size,
+  };
+}
+
+function validateXbotProject(xbotDir, flowName, opts = {}) {
+  const cfg = opts.cfg || loadConfig();
+  try {
+    const { validateProject } = requireValidate(cfg);
+    return { ok: true, result: validateProject(xbotDir, flowName || '') };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
 module.exports = {
   getRpaSkillPath,
   getShadowBotUsersRoot,
@@ -419,4 +515,7 @@ module.exports = {
   scanLocalApps,
   understandFlow,
   loadFlowBlocks,
+  inspectProject,
+  readProjectFile,
+  validateXbotProject,
 };

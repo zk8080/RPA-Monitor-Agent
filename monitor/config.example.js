@@ -51,7 +51,18 @@ module.exports = {
   // anthropicModel: 'claude-sonnet-4-20250514',
   // anthropicBaseUrl: 'https://api.anthropic.com',
 
-  maxToolRounds: 8,
+  // ===== maintain（巡检 / py 受控修复）=====
+  maintain: {
+    autoFix: {
+      enabled: false,
+      classes: ['code_boundary', 'null_guard'],
+      requirePyCompile: true,
+      requireValidate: false,
+      maxFilesPerPatch: 1,
+      maxPatchBytes: 200000,
+    },
+  },
+
 
   // ===== 运行时（service.js）=====
   pollIntervalMinutes: 15,
