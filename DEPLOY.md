@@ -1,0 +1,196 @@
+# 部署指南：可挂机的 RPA Diagnosis Agent
+
+## 先回答你的问题
+
+| 疑问 | 答案 |
+|------|------|
+| 还是得自己每次执行 node 脚本吗？ | **不必。** 日常应跑 **`service.js` 常驻 Runtime**（或任务计划定时 `--once`），不是手敲 poll/diagnose。 |
+| 想要的是可部署在服务器上的 Agent？ | **产品目标就是这个。** CLI 只是开发/排障入口；**部署单元 = 一个常驻（或定时）Agent 进程**。 |
+| `node monitor/agent.js` 还要不要？ | 需要时手动深挖单条失败；**生产主路径是 service**。 |
+
+```
+开发排障（可选）          生产部署（主路径）
+─────────────────        ─────────────────────────────
+poll.js / agent.js   →   service.js 常驻 或 定时 --once
+report.js 手动           进程内自动 poll + diagnose + report
+                         可选 GET /health
+```
+
+---
+
+## 三种部署形态（按环境选）
+
+### A. Windows 服务器 / 本机挂机（推荐起步）
+
+**形态：** 一个 Node 进程常驻，崩溃用计划任务或 NSSM 拉起。
+
+```powershell
+# 仓库根目录
+copy monitor\config.example.js monitor\config.local.js
+# 编辑密钥：accessKeyId / accessKeySecret；建议 healthPort: 8787
+
+# 单轮验收（跑完退出）
+npm run once
+
+# 前台常驻（调试）
+npm start
+
+# 后台常驻 + 写日志（推荐）
+powershell -File deploy\windows\start-service.ps1
+```
+
+**开机自启（任务计划）：**
+
+1. 打开「任务计划程序」→ 创建任务  
+2. 触发器：登录时 / 启动时  
+3. 操作：启动程序  
+   - 程序：`powershell.exe`  
+   - 参数：`-NoProfile -ExecutionPolicy Bypass -File "D:\RPA-Monitor-Agent\deploy\windows\start-service.ps1"`  
+   - 起始于：`D:\RPA-Monitor-Agent`  
+4. 条件：取消「只有交流电源才运行」（笔记本服务器可按需）  
+5. 设置：若失败，每隔 1 分钟 重新启动  
+
+**备选：只定时、不常驻**
+
+- 程序：`node.exe`  
+- 参数：`monitor/service.js --once`  
+- 触发：每 15 分钟  
+
+适合不能常驻进程、只允许计划任务的环境。
+
+### B. Linux 服务器 + systemd（公司常见）
+
+```bash
+# 1. Node ≥ 18，克隆仓库
+cp monitor/config.example.js monitor/config.local.js
+# 编辑密钥；healthPort 建议 8787
+
+# 2. 单轮验收
+npm run once
+
+# 3. 安装 systemd 单元（按实际路径改 WorkingDirectory / User）
+sudo cp deploy/linux/rpa-monitor-agent.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now rpa-monitor-agent
+
+# 4. 看状态与日志
+systemctl status rpa-monitor-agent
+journalctl -u rpa-monitor-agent -f
+curl -s http://127.0.0.1:8787/health
+```
+
+### C. PM2（Node 运维习惯时）
+
+```bash
+npm i -g pm2
+pm2 start deploy/ecosystem.config.cjs
+pm2 save
+pm2 startup   # 按提示配置开机
+pm2 logs rpa-monitor-agent
+```
+
+---
+
+## 配置（服务器必看）
+
+`monitor/config.local.js`（**勿提交 git**）或环境变量：
+
+| 项 | 说明 | 生产建议 |
+|----|------|----------|
+| `accessKeyId` / `accessKeySecret` | 影刀 OpenAPI | 必填 |
+| `robotClientUuid` | 限定机器人 | 有多机器人时建议填 |
+| `pollIntervalMinutes` | 轮询间隔 | 15 |
+| `diagnoseCron` / `reportCron` | 额外诊断/日报（分 时） | `0 9 * * *` / `5 9 * * *` |
+| `healthPort` | HTTP 健康检查 | **8787**（0=关闭） |
+| `rpaSkillPath` | rpa-skill 路径 | 服务器上要存在 |
+| `llmBaseUrl` / `llmApiKey` / `llmModel` | 通用 LLM（OpenAI 兼容） | 可选；无 apiKey 则纯规则 |
+| `llmApiStyle` | `openai`（默认）或 `anthropic` | 三方中转一般用 openai |
+| （兼容）`anthropicApiKey` | 旧字段，仍可读 | 建议迁到 llm* |
+
+| `DATA_DIR` 环境变量 | Memory 目录 | 默认真仓库 `data/`；可指到数据盘 |
+
+环境变量优先级高于 `config.local.js`：
+
+```text
+YD_ACCESS_KEY_ID / YD_ACCESS_KEY_SECRET
+YD_ROBOT_CLIENT_UUID / YD_JOB_SIZE
+RPA_SKILL_PATH
+LLM_BASE_URL / LLM_API_KEY / LLM_MODEL / LLM_API_STYLE
+HEALTH_PORT / DATA_DIR
+```
+
+
+---
+
+## 健康检查与运维
+
+常驻且 `healthPort > 0` 时：
+
+```bash
+curl -s http://127.0.0.1:8787/health
+```
+
+示例字段：`uptimeSec`、`lastPollAt`、`queueDepth`、`undiagnosed`、`pid`。
+
+| 现象 | 处理 |
+|------|------|
+| 提示 already_running | 看 `data/service.pid`；进程已死则删 pid 文件再启 |
+| 无新失败入队 | 查密钥、`robotClientUuid`、影刀侧是否有 error 运行 |
+| 诊断弱 / 无指令块 | 配置 `data/app-map.json`（robotUuid → xbotDir） |
+| 磁盘涨 | `data/queue`、`data/kb`、`data/reports` 按需归档（后期可加清理策略） |
+
+日志：
+
+- Windows 包装脚本：`data/logs/service-YYYYMMDD.log`  
+- systemd：`journalctl -u rpa-monitor-agent`  
+- PM2：`pm2 logs`
+
+---
+
+## 架构上「部署的是什么」
+
+```
+┌─────────────────────────────────────────┐
+│  服务器进程：node monitor/service.js      │  ← 部署单元
+│    Scheduler（确定性）                    │
+│      poll → queue / alerts               │
+│      diagnose skill（runner + tools）    │
+│      report → data/reports/              │
+│    GET /health（可选）                    │
+└─────────────────────────────────────────┘
+         │                    │
+    影刀 OpenAPI          rpa-skill（只读，可选）
+```
+
+- **不是**「运维每天跑三个脚本」  
+- **是**「一个 Agent Runtime 挂在服务器上，自己听、自己诊、自己出报告」  
+- CLI（`agent.js diagnose --job …`）始终可降级使用，服务挂了也能单次诊断  
+
+与 [ARCHITECTURE-FREEZE.md](ARCHITECTURE-FREEZE.md) 一致：service 只调度，业务在 lib tools。
+
+---
+
+## 安全注意
+
+1. `config.local.js` / 密钥 **不要进 git、不要打进公开镜像层**  
+2. `healthPort` 默认只绑本机逻辑使用；若对公网暴露须加防火墙/反向代理鉴权（当前 `/health` **无鉴权**）  
+3. `data/` 含失败日志摘要，按公司规范做盘权限  
+4. rpa-skill 与 app-map 指向的流程目录：服务器只读即可  
+
+---
+
+## 验收清单（上线前）
+
+- [ ] `npm run once` 成功：poll 有扫描、queue/kb 有更新、reports 有 md  
+- [ ] `npm start` 或 systemd/PM2 常驻后，`curl /health` 返回 ok  
+- [ ] 进程杀死后能自动拉起（任务计划 / systemd Restart / PM2）  
+- [ ] 双开第二实例会因 `service.pid` 拒绝（防双 poll）  
+- [ ] 密钥不在仓库远程历史中  
+
+---
+
+## 和「手敲脚本」的边界（宣讲可用）
+
+> 开发期可用 CLI 验证 tool 与 skill；**生产交付的是可常驻的 Diagnosis Agent Runtime**（`service.js`），由操作系统或进程管理器托管，自动完成监听、诊断入 KB 与日报，并提供健康检查。
+
+详细模块见 [TECH-DESIGN.md](TECH-DESIGN.md)；红线见 [ARCHITECTURE-FREEZE.md](ARCHITECTURE-FREEZE.md)。

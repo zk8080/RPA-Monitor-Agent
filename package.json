@@ -1,0 +1,19 @@
+{
+  "name": "rpa-monitor-agent",
+  "version": "0.1.0",
+  "private": true,
+  "description": "影刀 RPA 监听诊断 Agent：确定性 poll + diagnose skill + 可常驻 Runtime",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node monitor/service.js",
+    "once": "node monitor/service.js --once",
+    "poll": "node monitor/poll.js --once",
+    "diagnose": "node monitor/agent.js diagnose --queue --limit 10 --no-llm",
+    "report": "node monitor/report.js",
+    "verify": "node monitor/verify_openapi.js",
+    "test:fingerprint": "node monitor/test_fingerprint.js",
+    "health": "node -e \"const p=process.env.HEALTH_PORT||8787;fetch('http://127.0.0.1:'+p+'/health').then(r=>r.text()).then(console.log).catch(e=>{console.error(e.message);process.exit(1)})\""
+  }
+}

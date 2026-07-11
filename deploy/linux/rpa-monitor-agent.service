@@ -1,0 +1,44 @@
+# RPA Monitor & Diagnosis Agent — systemd
+#
+# 安装前修改：
+#   WorkingDirectory= 仓库绝对路径
+#   User= 运行用户
+#   Environment= 如需覆盖密钥/端口
+#
+# sudo cp deploy/linux/rpa-monitor-agent.service /etc/systemd/system/
+# sudo systemctl daemon-reload
+# sudo systemctl enable --now rpa-monitor-agent
+
+[Unit]
+Description=RPA Monitor & Diagnosis Agent Runtime
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=rpa
+Group=rpa
+WorkingDirectory=/opt/RPA-Monitor-Agent
+# 密钥优先用 Environment 或机器上的 config.local.js（勿把密钥写进本文件并提交 git）
+# Environment=YD_ACCESS_KEY_ID=
+# Environment=YD_ACCESS_KEY_SECRET=
+Environment=HEALTH_PORT=8787
+# Environment=DATA_DIR=/var/lib/rpa-monitor-agent
+# Environment=RPA_SKILL_PATH=/opt/RPA-Skill
+ExecStart=/usr/bin/node monitor/service.js
+Restart=always
+RestartSec=10
+# 优雅退出：service 监听 SIGTERM
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+# 日志进 journald
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=rpa-monitor-agent
+
+# 安全加固（可按环境收紧）
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
