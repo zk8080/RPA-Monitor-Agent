@@ -400,6 +400,24 @@ async function runDiagnosePlaybook(input, cfg, options = {}) {
   // 6) 写 KB + 更新 queue
   let kbEntry = null;
   if (!options.dryRun) {
+    // S10b：同 errorSignature 的其它应用写入 affectedApps
+    let affectedApps = [];
+    if (working.errorSignature) {
+      try {
+        const peers = memory
+          .listQueueItems(cfg.dataDir)
+          .filter((q) => q.errorSignature === working.errorSignature && q.robotUuid);
+        const uuids = [
+          ...new Set(
+            [working.robotUuid, ...peers.map((p) => p.robotUuid)].filter(Boolean),
+          ),
+        ];
+        if (uuids.length > 1) affectedApps = uuids;
+      } catch {
+        affectedApps = [];
+      }
+    }
+
     kbEntry = await step('kb_write', {
       fingerprint: working.fingerprint,
       errorSignature: working.errorSignature,
@@ -412,11 +430,19 @@ async function runDiagnosePlaybook(input, cfg, options = {}) {
       location: diagnosis.location,
       errorCategory: diagnosis.errorCategory,
       affectedBlocks: diagnosis.affectedBlocks || [],
+      affectedApps,
       confidence: diagnosis.confidence,
       occurrenceCount: working.occurrenceCount || 1,
       status: 'pending_review',
       sourceJobUuids: working.sampleJobUuids || (jobUuid ? [jobUuid] : []),
-      notes: diagnosis.notes || '',
+      notes: [
+        diagnosis.notes || '',
+        affectedApps.length > 1
+          ? `跨应用特征 errorSignature 命中 ${affectedApps.length} 个 app`
+          : '',
+      ]
+        .filter(Boolean)
+        .join(' | '),
       kbAction: history.some((h) => h.fingerprint === working.fingerprint) ? 'update' : 'create',
     });
 

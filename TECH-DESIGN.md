@@ -742,7 +742,7 @@ Poll：`POLL_LOOKBACK_HOURS` / `POLL_MAX_PAGES`。
 | **P1** | **S20** ✅ | maintain 进入日报 | report 附可预览修候选 / dry-run / 待验证 / 复发 | 日报「维护与补丁」节 |
 | **P1** | **S10a** ✅ | KB-first 短路 | `diagnose.kbFirst`；仅 confirmed+同 fp+高置信 | 开关默认关；pending 永不短路 |
 | **P1** | **S25b** ✅ | 工作台操作面 | 一键 diagnose / maintain dry-run；`/api/findings`；问题详情页 | 经 `runSkill`；Web **永不 apply** |
-| **P2** | **S10b** | 跨应用归并 | `errorSignature` + affectedApps | 报告一条根因多 app |
+| **P2** | **S10b** ✅ | 跨应用归并 | `errorSignature` + `affectedApps`（queue 主键仍 fingerprint） | 日报/总览「跨应用根因」；KB 写入 affectedApps |
 | **P2** | **S10c** | 分诊标签 | `fixOwner`: business / developer / known | 进 diagnosis + 报告 |
 | **P2** | **S21** | 服务器流程源码策略 | 无 ShadowBot：共享盘 / app-map / 降级 | DEPLOY 专节 + 配置 |
 | **P2** | **S22** | develop skill 骨架 | `agent.js develop` 路由细化 | 入口存在、不破坏现网 |

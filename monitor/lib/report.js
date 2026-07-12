@@ -10,6 +10,7 @@ const kb = require('./kb');
 const patchLib = require('./patch');
 const { classifyFix, canPreviewFix, describeFixGuidance } = require('./triage');
 const rpa = require('./rpa');
+const { mergeByErrorSignature } = require('./merge');
 
 function toDateKey(date) {
   const d = date ? new Date(date) : new Date();
@@ -210,6 +211,9 @@ function buildDailyReport(cfg, options = {}) {
     lines.push('');
   }
 
+  // S10b：跨应用归并（errorSignature，≥2 app）
+  const crossAppGroups = mergeByErrorSignature(ranked, { minApps: 2, countFn: pollCount });
+
   // S20：maintain / patch 挂钩
   const allPatches = patchLib.listPatches(dataDir);
   const plannedPatches = allPatches.filter((p) => p.status === 'planned' || (p.dryRun !== false && !p.appliedAt));
@@ -293,6 +297,36 @@ function buildDailyReport(cfg, options = {}) {
       if (item.lastPatchId) lines.push(`  补丁：${item.lastPatchId}`);
       if (item.sampleJobUuids && item.sampleJobUuids[0]) {
         lines.push(`  样例 jobUuid：${item.sampleJobUuids[0]}`);
+      }
+      lines.push('');
+    });
+  }
+
+  // S10b 专节：一条根因多 app
+  if (crossAppGroups.length) {
+    lines.push('### 跨应用根因（S10b）');
+    lines.push('');
+    lines.push(`共 **${crossAppGroups.length}** 组（errorSignature 相同且 ≥2 个应用）。`);
+    lines.push('');
+    crossAppGroups.slice(0, 12).forEach((g, i) => {
+      const title =
+        g.rootCauseHint ||
+        [g.flowName, g.errorType, g.elementName].filter(Boolean).join(' · ') ||
+        g.errorSignature;
+      lines.push(`■ C${i + 1}. ${title}`);
+      lines.push(`  特征：\`${g.errorSignature}\``);
+      lines.push(`  影响 **${g.appCount}** 个应用 · 本轮合计 **${g.totalCount}** 条`);
+      g.affectedApps.forEach((a) => {
+        lines.push(
+          `  - ${a.robotName || a.robotUuid}${a.count > 1 ? `（${a.count}）` : ''} · fp ${
+            a.fingerprints[0] || ''
+          }`,
+        );
+      });
+      if (g.sampleFingerprint) {
+        lines.push(
+          `  样例：\`node monitor/agent.js diagnose --fingerprint ${g.sampleFingerprint} --no-llm\``,
+        );
       }
       lines.push('');
     });
@@ -393,6 +427,7 @@ function buildDailyReport(cfg, options = {}) {
       plannedPatches: plannedPatches.length,
       pendingVerify: pendingVerify.length,
       regressed: regressed.length,
+      crossAppGroups: crossAppGroups.length,
     },
   };
 }

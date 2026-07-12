@@ -13,6 +13,7 @@ const kb = require('./kb');
 const { classifyFix, canPreviewFix, describeFixGuidance } = require('./triage');
 const { runSkill } = require('./agent-runner');
 const { buildDailyReport, toDateKey } = require('./report');
+const { mergeByErrorSignature } = require('./merge');
 
 /** @type {{ at: number, apps: object, queueStats: Map } | null} */
 let memCache = null;
@@ -108,6 +109,9 @@ function buildOverview(cfg, state = {}) {
       lastSeen: r.lastSeen,
     }));
 
+  // S10b：queue 全量按 errorSignature 归并（≥2 app）
+  const crossAppGroups = mergeByErrorSignature(queueItems, { minApps: 2 }).slice(0, 12);
+
   const startedAt = state.startedAt || Date.now();
 
   return {
@@ -130,6 +134,23 @@ function buildOverview(cfg, state = {}) {
       undiagnosed,
     },
     problemApps,
+    crossAppGroups: crossAppGroups.map((g) => ({
+      errorSignature: g.errorSignature,
+      flowName: g.flowName,
+      errorType: g.errorType,
+      elementName: g.elementName,
+      rootCauseHint: g.rootCauseHint,
+      appCount: g.appCount,
+      totalCount: g.totalCount,
+      lastSeen: g.lastSeen,
+      sampleFingerprint: g.sampleFingerprint,
+      affectedApps: g.affectedApps.map((a) => ({
+        robotUuid: a.robotUuid,
+        robotName: a.robotName,
+        count: a.count,
+        sampleFingerprint: a.fingerprints[0] || '',
+      })),
+    })),
   };
 }
 

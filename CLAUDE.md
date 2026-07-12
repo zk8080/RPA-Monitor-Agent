@@ -75,8 +75,9 @@ D:\RPA-Monitor-Agent  消费：监听 OpenAPI + 诊断 Agent + 日报 / KB
 - ✅ **S20** 日报 maintain/patch 挂钩  
 - ✅ **S10a** KB-first（仅 confirmed，默认关）  
 - ✅ **S19** 空路径 py fixer（`python_empty_path`）  
+- ✅ **S10b** 跨应用根因归并（errorSignature ≥2 app）  
 - ➡ **继续实现 backlog：** [TECH-DESIGN.md §十五](TECH-DESIGN.md)  
-  - **P2：** 跨应用 / fixOwner / 服务器源码策略 / develop 骨架  
+  - **P2：** S10c fixOwner / S21 服务器源码 / S22 develop 骨架  
   - **P3：** tool-loop / 对话入口（可选）  
   - **禁止：** service 默认 apply 生产 py；Web 复制平行业务栈  
 

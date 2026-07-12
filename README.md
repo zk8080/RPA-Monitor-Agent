@@ -97,7 +97,8 @@ npm start
 | **S17** 诊后 dry-run 存 patch | ✅（`maintain.autoPlanOnDiagnose`，默认关） |
 | **S18** 修复验证闭环 | ✅（pending_verify / regressed / verified） |
 | **S20 / S10a / S19** P1 | ✅ 日报挂钩 · KB-first · 空路径 fixer |
-| S10b+ 后续 | 见下表 |
+| **S10b** 跨应用归并 | ✅ errorSignature ≥2 app |
+| S10c+ 后续 | 见下表 |
 | service 自动 apply | **永不默认** |
 
 ## 继续实现方向（backlog）
@@ -113,7 +114,8 @@ npm start
 | **P1** | **S20** ✅ | maintain 候选进日报 |
 | **P1** | **S10a** ✅ | KB-first（仅 confirmed） |
 | **P1** | **S25b** ✅ | 工作台操作面 |
-| **P2** | **S10b/c** | 跨应用归并、fixOwner 分诊 |
+| **P2** | **S10b** ✅ | 跨应用归并（errorSignature） |
+| **P2** | **S10c** | fixOwner 分诊 |
 | **P2** | **S21** | 服务器无 ShadowBot 时的源码策略 |
 | **P2** | **S22** | develop skill 骨架 |
 | **P3** | **S23/S24** | maintain tool-loop / 对话入口（可选） |
