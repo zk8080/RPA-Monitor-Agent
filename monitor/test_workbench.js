@@ -142,6 +142,14 @@ const state = { startedAt: Date.now(), lastPollAt: null, lastDiagnoseAt: null, l
   assert.ok(String(index.headers['content-type'] || '').includes('text/html'));
   assert.ok(index.body.includes('RPA'));
 
+  // S25b routes exist
+  const findingMiss = await request(server, 'GET', '/api/findings/no-such-fp');
+  assert.strictEqual(findingMiss.status, 404);
+
+  const patches = await request(server, 'GET', '/api/patches');
+  assert.strictEqual(patches.status, 200);
+  assert.strictEqual(JSON.parse(patches.body).ok, true);
+
   const missing = await request(server, 'GET', '/api/nope');
   assert.strictEqual(missing.status, 404);
 

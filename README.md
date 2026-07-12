@@ -93,6 +93,7 @@ npm start
 | S0–S9 监听诊断 Runtime | ✅ |
 | S11–S16 maintain 巡检 + py 受控修 | ✅ |
 | **S25** 本机开发者工作台 Web MVP | ✅ |
+| **S25b** 工作台操作面 | ✅（诊断 / 预览修复 / 问题详情） |
 | **S17** 诊后 dry-run 存 patch | ✅（`maintain.autoPlanOnDiagnose`，默认关） |
 | **S18** 修复验证闭环 | ✅（pending_verify / regressed / verified） |
 | S10 / S19+ 后续 | 见下表 |

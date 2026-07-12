@@ -78,7 +78,13 @@
     if (kicker) {
       const route = parseRoute();
       kicker.textContent =
-        route.name === 'apps' ? 'Catalog' : route.name === 'app' ? 'Application' : 'Workspace';
+        route.name === 'apps'
+          ? 'Catalog'
+          : route.name === 'app'
+            ? 'Application'
+            : route.name === 'finding'
+              ? 'Finding'
+              : 'Workspace';
     }
   }
 
@@ -137,22 +143,31 @@
   function failureActionsHtml(f, robotUuid) {
     const fp = f.fingerprint || '';
     const remark = f.rawRemark || '';
-    const flow = f.flowName || '';
+    const diag = f.lastDiagnosis;
     return `<div class="item-side">
       <div class="badges">
         ${f.diagnosed ? '<span class="badge ok">已诊断</span>' : '<span class="badge warn">未诊断</span>'}
+        ${f.fixStatus ? `<span class="badge">${esc(f.fixStatus)}</span>` : ''}
         ${f.occurrenceCount ? `<span class="badge">${esc(f.occurrenceCount)} 次</span>` : ''}
       </div>
+      ${
+        diag && diag.rootCause
+          ? `<div class="item-sub wrap" style="max-width:220px;text-align:right">${esc(
+              String(diag.rootCause).slice(0, 80),
+            )}</div>`
+          : ''
+      }
       <div class="item-actions">
+        <a class="btn sm primary" href="#/findings/${encodeURIComponent(fp)}">详情</a>
+        <button type="button" class="btn sm" data-action="diagnose" data-fp="${esc(fp)}">诊断</button>
+        <button type="button" class="btn sm" data-action="fix-dry-run" data-fp="${esc(fp)}">预览修复</button>
         <button type="button" class="btn sm" data-copy="${esc(fp)}" data-copy-msg="指纹已复制">复制指纹</button>
         ${
           remark
             ? `<button type="button" class="btn sm" data-copy="${esc(remark)}" data-copy-msg="备注已复制">复制备注</button>`
             : ''
         }
-        <a class="btn sm" href="#/apps/${encodeURIComponent(robotUuid)}/flow">${
-          flow ? `流程` : '流程图'
-        }</a>
+        <a class="btn sm" href="#/apps/${encodeURIComponent(robotUuid)}/flow">流程图</a>
       </div>
     </div>`;
   }
@@ -171,10 +186,72 @@
     });
   }
 
+  function bindActionButtons(root) {
+    const scope = root || document;
+    scope.querySelectorAll('[data-action]').forEach((btn) => {
+      if (btn._actBound) return;
+      btn._actBound = true;
+      btn.addEventListener('click', async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const action = btn.getAttribute('data-action');
+        const fp = btn.getAttribute('data-fp');
+        if (!action || !fp) return;
+        await runFindingAction(action, fp, btn);
+      });
+    });
+  }
+
+  async function runFindingAction(action, fingerprint, btn) {
+    const label = btn ? btn.textContent : '';
+    if (btn) {
+      btn.disabled = true;
+      btn.classList.add('busy');
+      btn.textContent = action === 'diagnose' ? '诊断中…' : '生成中…';
+    }
+    try {
+      const path =
+        action === 'diagnose'
+          ? `/api/findings/${encodeURIComponent(fingerprint)}/diagnose`
+          : `/api/findings/${encodeURIComponent(fingerprint)}/fix-dry-run`;
+      const r = await api(path, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ useLlm: false, force: action === 'fix-dry-run' }),
+      });
+      if (r.ok) {
+        if (action === 'diagnose') {
+          const d = r.result && r.result.diagnosis;
+          toast(d && d.rootCause ? `诊断完成：${String(d.rootCause).slice(0, 60)}` : '诊断完成');
+        } else {
+          const p = r.result && r.result.patch;
+          const pid = p && (p.patchId || p.id);
+          toast(pid ? `已生成预览 ${pid}` : r.result?.message || '预览已生成（未写盘）');
+        }
+        const next = `#/findings/${encodeURIComponent(fingerprint)}`;
+        if (location.hash === next) await route();
+        else location.hash = next;
+      } else {
+        toast(r.message || r.code || '操作失败');
+      }
+    } catch (err) {
+      toast(err.message || '请求失败');
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.classList.remove('busy');
+        btn.textContent = label;
+      }
+    }
+  }
+
   function parseRoute() {
     const raw = (location.hash || '#/').replace(/^#/, '') || '/';
     const parts = raw.split('/').filter(Boolean);
     if (!parts.length) return { name: 'home' };
+    if (parts[0] === 'findings' && parts[1]) {
+      return { name: 'finding', fingerprint: decodeURIComponent(parts[1]) };
+    }
     if (parts[0] === 'apps' && parts[1]) {
       return {
         name: 'app',
@@ -680,6 +757,7 @@
       </div>
     `;
     bindCopyButtons(tabBody);
+    bindActionButtons(tabBody);
   }
 
   function renderAppFailures(tabBody, detail, robotUuid) {
@@ -707,6 +785,136 @@
         }
       </div>`;
     bindCopyButtons(tabBody);
+    bindActionButtons(tabBody);
+  }
+
+  async function renderFinding(fingerprint) {
+    setNav('apps');
+    setHeader('问题详情', fingerprint);
+    content.innerHTML = '<div class="loading">加载中…</div>';
+
+    const data = await api(`/api/findings/${encodeURIComponent(fingerprint)}`);
+    if (!data.ok) {
+      content.innerHTML = `<div class="err">加载失败：${esc(data.message || data.code)}</div>
+        <p class="mt"><a href="#/apps">返回应用</a></p>`;
+      return;
+    }
+
+    const f = data.finding || {};
+    const d = data.diagnosis || {};
+    const k = data.kb || {};
+    const patches = data.patches || [];
+    const robotUuid = f.robotUuid || '';
+
+    setHeader(f.robotName || fingerprint, `${f.errorType || ''} · ${f.diagnosed ? '已诊断' : '未诊断'}`);
+
+    content.innerHTML = `
+      <div class="crumb">
+        <a href="#/apps">应用</a>
+        ${robotUuid ? ` / <a href="#/apps/${encodeURIComponent(robotUuid)}">${esc(f.robotName || robotUuid)}</a>` : ''}
+        / <span class="mono">${esc(fingerprint)}</span>
+      </div>
+
+      <div class="detail-top">
+        <div style="min-width:0;flex:1">
+          <div class="badges" style="justify-content:flex-start">
+            ${f.diagnosed ? '<span class="badge ok">已诊断</span>' : '<span class="badge warn">未诊断</span>'}
+            ${f.fixStatus ? `<span class="badge">${esc(f.fixStatus)}</span>` : ''}
+            ${f.occurrenceCount ? `<span class="badge">${esc(f.occurrenceCount)} 次</span>` : ''}
+          </div>
+          <div class="path mono">${esc(fingerprint)}</div>
+          <p class="hint">${esc((f.rawRemark || '').slice(0, 400))}</p>
+        </div>
+        <div class="actions">
+          <button type="button" class="btn primary" data-action="diagnose" data-fp="${esc(fingerprint)}">诊断</button>
+          <button type="button" class="btn" data-action="fix-dry-run" data-fp="${esc(fingerprint)}">预览修复</button>
+          ${
+            robotUuid
+              ? `<a class="btn ghost" href="#/apps/${encodeURIComponent(robotUuid)}/flow">流程图</a>`
+              : ''
+          }
+        </div>
+      </div>
+
+      <div class="grid-2">
+        <div class="panel">
+          <h2>诊断结论</h2>
+          ${
+            d.rootCause || k.rootCause
+              ? `<div class="kv">
+                  <div class="k">根因</div><div class="v">${esc(d.rootCause || k.rootCause || '—')}</div>
+                  <div class="k">位置</div><div class="v">${esc(d.location || k.location || '—')}</div>
+                  <div class="k">建议</div><div class="v">${esc(d.suggestion || k.solution || '—')}</div>
+                  <div class="k">置信度</div><div class="v">${esc(d.confidence != null ? d.confidence : k.confidence ?? '—')}</div>
+                  <div class="k">类别</div><div class="v">${esc(d.errorCategory || k.errorCategory || '—')}</div>
+                </div>`
+              : empty('尚未诊断', '点击「诊断」生成结构化结论（规则，默认不调 LLM）。')
+          }
+          ${k.id ? `<p class="hint mt">KB：${esc(k.id)} · ${esc(k.status || '')}</p>` : ''}
+        </div>
+        <div class="panel">
+          <h2>元数据</h2>
+          <div class="kv">
+            <div class="k">应用</div><div class="v">${esc(f.robotName || '')}</div>
+            <div class="k">UUID</div><div class="v mono">${esc(robotUuid)}</div>
+            <div class="k">流程</div><div class="v">${esc(f.flowName || '—')} L${esc(f.lineNumber || '?')}</div>
+            <div class="k">错误</div><div class="v">${esc(f.errorType || '—')}</div>
+            <div class="k">最近</div><div class="v">${esc(relTime(f.lastSeen))}</div>
+            <div class="k">补丁</div><div class="v mono">${esc(f.lastPatchId || '—')}</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel mt">
+        <h2>相关补丁 <span class="meta">${patches.length}</span></h2>
+        ${
+          patches.length
+            ? `<div class="list">${patches
+                .map(
+                  (p) => `<div class="list-item">
+                    <div class="item-main">
+                      <div class="item-title mono">${esc(p.patchId)}</div>
+                      <div class="item-sub">${esc(p.status)} · ${esc(p.fixerId || '')} · ${esc(
+                        p.createdAt || '',
+                      )}</div>
+                    </div>
+                    <div class="item-side">
+                      <div class="badges">
+                        ${p.dryRun !== false && p.status === 'planned' ? '<span class="badge">dry-run</span>' : ''}
+                        <span class="badge">${esc(p.status)}</span>
+                      </div>
+                      <div class="item-actions">
+                        <button type="button" class="btn sm" data-patch="${esc(p.patchId)}">看 diff</button>
+                      </div>
+                    </div>
+                  </div>`,
+                )
+                .join('')}</div>
+              <div id="patch-diff-host" class="mt"></div>`
+            : empty('暂无补丁', '可点「预览修复」生成 dry-run patch（不写盘）。')
+        }
+      </div>
+      <div id="action-result" class="panel mt" style="display:none"></div>
+    `;
+
+    bindActionButtons(content);
+    content.querySelectorAll('[data-patch]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const id = btn.getAttribute('data-patch');
+        const host = $('#patch-diff-host');
+        if (!host) return;
+        host.innerHTML = '<div class="loading">加载 diff…</div>';
+        const pd = await api(`/api/patches/${encodeURIComponent(id)}`);
+        if (!pd.ok) {
+          host.innerHTML = `<div class="err">${esc(pd.message || pd.code)}</div>`;
+          return;
+        }
+        host.innerHTML = `
+          <h2 style="margin:0 0 8px;font-size:13px;color:var(--text-3)">${esc(id)}</h2>
+          <div class="pre">${esc(pd.diff || '(empty diff)')}</div>
+          <p class="hint">写盘请用 CLI：node monitor/agent.js maintain fix --fingerprint … --apply</p>`;
+      });
+    });
   }
 
   async function renderAppFlow(robotUuid, detail, forceRefresh) {
@@ -845,7 +1053,8 @@
     await refreshRuntime();
     const r = parseRoute();
     try {
-      if (r.name === 'apps') await renderApps();
+      if (r.name === 'finding') await renderFinding(r.fingerprint);
+      else if (r.name === 'apps') await renderApps();
       else if (r.name === 'app') {
         const tab = r.tab === 'flow' || r.tab === 'failures' ? r.tab : 'overview';
         await renderApp(r.robotUuid, tab);

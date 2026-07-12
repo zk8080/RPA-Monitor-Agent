@@ -87,6 +87,7 @@ module.exports = {
     enabled: true, // false：仅 /health，不挂 /api 与静态页
     openFolderEnabled: true, // POST 打开 xbot 目录
     understandCache: true, // data/cache/understand
+    actionsEnabled: true, // S25b：Web 一键 diagnose / fix dry-run（永不 apply）
     // openCommand: null, // 可选：自定义打开命令，默认 Windows explorer
   },
 

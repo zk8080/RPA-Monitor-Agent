@@ -155,6 +155,61 @@ async function handleRequest(req, res, ctx) {
         return true;
       }
 
+      // S25b：失败详情
+      const findingGet = pathname.match(/^\/api\/findings\/([^/]+)\/?$/);
+      if (method === 'GET' && findingGet) {
+        const fingerprint = decodeURIComponent(findingGet[1]);
+        const result = workbench.getFindingDetail(fingerprint, cfg);
+        sendJson(res, result.ok ? 200 : 404, result);
+        return true;
+      }
+
+      // S25b：触发 skill（仅 diagnose / fix-dry-run）
+      const findingAction = pathname.match(/^\/api\/findings\/([^/]+)\/(diagnose|fix-dry-run)\/?$/);
+      if (method === 'POST' && findingAction) {
+        const fingerprint = decodeURIComponent(findingAction[1]);
+        const action = findingAction[2];
+        let body = {};
+        try {
+          const raw = await readBody(req);
+          if (raw) body = JSON.parse(raw);
+        } catch {
+          body = {};
+        }
+        const result = await workbench.runWorkbenchAction(
+          action,
+          {
+            fingerprint,
+            useLlm: body.useLlm === true,
+            force: body.force === true,
+          },
+          cfg,
+        );
+        const status = result.ok ? 200 : result.code === 'busy' ? 409 : result.code === 'actions_disabled' ? 403 : 400;
+        sendJson(res, status, result);
+        return true;
+      }
+
+      // S25b：patches
+      if (method === 'GET' && pathname === '/api/patches') {
+        const result = workbench.listPatchesForWorkbench(cfg, {
+          fingerprint: url.searchParams.get('fingerprint') || undefined,
+          robotUuid: url.searchParams.get('robotUuid') || undefined,
+          status: url.searchParams.get('status') || undefined,
+          limit: parseInt(url.searchParams.get('limit') || '50', 10),
+        });
+        sendJson(res, 200, result);
+        return true;
+      }
+
+      const patchGet = pathname.match(/^\/api\/patches\/([^/]+)\/?$/);
+      if (method === 'GET' && patchGet) {
+        const patchId = decodeURIComponent(patchGet[1]);
+        const result = workbench.getPatchDetail(cfg, patchId);
+        sendJson(res, result.ok ? 200 : 404, result);
+        return true;
+      }
+
       const appDetail = pathname.match(/^\/api\/apps\/([^/]+)\/?$/);
       if (method === 'GET' && appDetail) {
         const robotUuid = decodeURIComponent(appDetail[1]);

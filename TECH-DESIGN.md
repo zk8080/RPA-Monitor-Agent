@@ -741,7 +741,7 @@ Poll：`POLL_LOOKBACK_HOURS` / `POLL_MAX_PAGES`。
 | **P1** | **S19** | 更多 py fixer + LLM plan | 空路径等模板；复杂函数 LLM 出 diff 仍经 py_compile | 夹具 + 1～2 真实样例 dry-run |
 | **P1** | **S20** | maintain 进入日报 | report 附「可自动修候选 / 未处理 patch」 | 日报一节可读 |
 | **P1** | **S10a** | KB-first 短路 | 仅 `confirmed` 高置信跳过完整 diagnose | 开关；未确认永不短路 |
-| **P1** | **S25b** | 工作台操作面 | 一键 diagnose / maintain dry-run；问题详情页 | 仍走 runner；无平行业务栈 |
+| **P1** | **S25b** ✅ | 工作台操作面 | 一键 diagnose / maintain dry-run；`/api/findings`；问题详情页 | 经 `runSkill`；Web **永不 apply** |
 | **P2** | **S10b** | 跨应用归并 | `errorSignature` + affectedApps | 报告一条根因多 app |
 | **P2** | **S10c** | 分诊标签 | `fixOwner`: business / developer / known | 进 diagnosis + 报告 |
 | **P2** | **S21** | 服务器流程源码策略 | 无 ShadowBot：共享盘 / app-map / 降级 | DEPLOY 专节 + 配置 |
