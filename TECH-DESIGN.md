@@ -738,9 +738,9 @@ Poll：`POLL_LOOKBACK_HOURS` / `POLL_MAX_PAGES`。
 | **P0** | **S25** ✅ | **本机开发者工作台 Web MVP** | 同进程 HTTP：总览 + 应用列表 + understand + 打开文件夹 | 浏览器走通主路径；只绑 127.0.0.1；业务走 lib/tools |
 | **P0** | **S17** ✅ | 诊后自动 **dry-run 存 patch** | `maintain.autoPlanOnDiagnose`：fixability=auto 时 maintain fix dry-run | 开启后诊断结果含 autoPlan.patchId；xbot **未改** |
 | **P0** | **S18** ✅ | 修复验证闭环 | apply→`fixed_pending_verify`；新 job 同指纹→`regressed`；静默 quietDays→`verified` | poll 日志 / patch meta / KB status |
-| **P1** | **S19** | 更多 py fixer + LLM plan | 空路径等模板；复杂函数 LLM 出 diff 仍经 py_compile | 夹具 + 1～2 真实样例 dry-run |
-| **P1** | **S20** | maintain 进入日报 | report 附「可自动修候选 / 未处理 patch」 | 日报一节可读 |
-| **P1** | **S10a** | KB-first 短路 | 仅 `confirmed` 高置信跳过完整 diagnose | 开关；未确认永不短路 |
+| **P1** | **S19** ✅ | 更多 py fixer | `python_empty_path` 空路径守卫；autoFix.classes 含 `config` | `test_maintain` 夹具 |
+| **P1** | **S20** ✅ | maintain 进入日报 | report 附可预览修候选 / dry-run / 待验证 / 复发 | 日报「维护与补丁」节 |
+| **P1** | **S10a** ✅ | KB-first 短路 | `diagnose.kbFirst`；仅 confirmed+同 fp+高置信 | 开关默认关；pending 永不短路 |
 | **P1** | **S25b** ✅ | 工作台操作面 | 一键 diagnose / maintain dry-run；`/api/findings`；问题详情页 | 经 `runSkill`；Web **永不 apply** |
 | **P2** | **S10b** | 跨应用归并 | `errorSignature` + affectedApps | 报告一条根因多 app |
 | **P2** | **S10c** | 分诊标签 | `fixOwner`: business / developer / known | 进 diagnosis + 报告 |

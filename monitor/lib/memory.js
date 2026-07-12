@@ -127,6 +127,9 @@ function markQueueDiagnosed(dataDir, fingerprint, extra = {}) {
       confidence: extra.diagnosis.confidence,
       errorCategory: extra.diagnosis.errorCategory,
       location: extra.diagnosis.location,
+      fixClass: extra.diagnosis.fixClass,
+      fixability: extra.diagnosis.fixability,
+      source: extra.diagnosis.source,
     };
   }
   atomicWriteJson(queuePath(dataDir, fingerprint), next);

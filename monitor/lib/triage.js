@@ -31,10 +31,12 @@ function classifyFix(working, ctx = {}) {
     fixability = 'auto';
   } else if (
     /No such file.*['"]\s*['"]|文件不存在:\s*$|Errno 2.*['"]\s*['"]/i.test(text) ||
-    (/No such file|文件不存在/.test(text) && /['"]\s*['"]/.test(text))
+    (/No such file|文件不存在|FileNotFoundError/.test(text) && /['"]\s*['"]/.test(text)) ||
+    /空路径|path is empty|empty path/i.test(text)
   ) {
     fixClass = 'config';
-    fixability = 'assisted';
+    // 有 py 目标时可 auto 走 empty_path fixer；否则 assisted
+    fixability = 'auto';
   } else if (/匹配到多个元素|未找到元素|找不到元素|元素未找到|元素定位/.test(text)) {
     fixClass = 'element';
     fixability = 'manual';
@@ -51,9 +53,9 @@ function classifyFix(working, ctx = {}) {
 
   const fixTargets = resolveFixTargets(working, ctx, text, fixClass);
 
-  // 没有 py 目标时，code 类不能 auto
+  // 没有 py 目标时，code/config 类不能 auto
   if (
-    (fixClass === 'code_boundary' || fixClass === 'null_guard') &&
+    (fixClass === 'code_boundary' || fixClass === 'null_guard' || fixClass === 'config') &&
     !fixTargets.some((t) => t.type === 'python')
   ) {
     if (fixability === 'auto') fixability = 'assisted';
@@ -68,7 +70,9 @@ function classifyFix(working, ctx = {}) {
  */
 function canPreviewFix(triage) {
   if (!triage) return false;
-  const hasPy = (triage.fixTargets || []).some((t) => t.type === 'python' && (t.absolutePath || t.relativePath));
+  const hasPy = (triage.fixTargets || []).some(
+    (t) => t.type === 'python' && (t.absolutePath || t.relativePath),
+  );
   if (!hasPy) return false;
   return triage.fixability === 'auto' || triage.fixability === 'assisted';
 }

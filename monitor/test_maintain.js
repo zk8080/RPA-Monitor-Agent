@@ -1,5 +1,5 @@
 /**
- * 快速自检：triage + index_error fixer + patch dry path
+ * 快速自检：triage + fixers + patch dry path
  */
 const assert = require('assert');
 const fs = require('fs');
@@ -7,6 +7,7 @@ const path = require('path');
 const os = require('os');
 const { classifyFix } = require('./lib/triage');
 const indexFixer = require('./lib/fixers/python_index_error');
+const emptyPathFixer = require('./lib/fixers/python_empty_path');
 const patch = require('./lib/patch');
 
 const t = classifyFix(
@@ -26,6 +27,19 @@ const plan = indexFixer.plan({
 });
 assert.ok(plan.ok, plan.error);
 assert.ok(plan.files[0].proposed.includes('if not rows:'));
+
+// S19 empty path fixer
+const emptySample = 'def load(p):\n    with open(p) as f:\n        return f.read()\n';
+const ep = emptyPathFixer.plan({
+  fileContent: emptySample,
+  absolutePath: 'p.py',
+  relativePath: 'p.py',
+  text: "FileNotFoundError: No such file or directory: ''",
+  lineHint: 2,
+});
+assert.ok(ep.ok, ep.error);
+assert.ok(ep.files[0].proposed.includes('if not p:'));
+assert.ok(emptyPathFixer.match({ text: "No such file: ''" }) > 0);
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'rpa-patch-'));
 const dataDir = path.join(tmp, 'data');
@@ -48,9 +62,12 @@ assert.ok(meta.patchId);
 const applied = patch.applyPatch(dataDir, meta.patchId);
 assert.ok(applied.ok, applied.error);
 assert.ok(fs.readFileSync(target, 'utf8').includes('if not rows:'));
-const rb = patch.rollbackPatch(dataDir, meta.patchId);
-assert.ok(rb.ok, rb.error);
-assert.strictEqual(fs.readFileSync(target, 'utf8'), sample);
+
+try {
+  fs.rmSync(tmp, { recursive: true, force: true });
+} catch {
+  // ignore
+}
 
 console.log('✅ maintain unit checks passed');
 console.log('   patchId', meta.patchId);

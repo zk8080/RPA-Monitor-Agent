@@ -18,7 +18,7 @@ function getAutoFixConfig(cfg) {
   const a = m.autoFix || {};
   return {
     enabled: a.enabled === true || process.env.MAINTAIN_AUTO_FIX === '1',
-    classes: a.classes || ['code_boundary', 'null_guard'],
+    classes: a.classes || ['code_boundary', 'null_guard', 'config'],
     requirePyCompile: a.requirePyCompile !== false,
     requireValidate: a.requireValidate === true,
     maxFilesPerPatch: a.maxFilesPerPatch || 1,

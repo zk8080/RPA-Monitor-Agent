@@ -7,6 +7,9 @@ const fs = require('fs');
 const path = require('path');
 const memory = require('./memory');
 const kb = require('./kb');
+const patchLib = require('./patch');
+const { classifyFix, canPreviewFix, describeFixGuidance } = require('./triage');
+const rpa = require('./rpa');
 
 function toDateKey(date) {
   const d = date ? new Date(date) : new Date();
@@ -207,6 +210,41 @@ function buildDailyReport(cfg, options = {}) {
     lines.push('');
   }
 
+  // S20：maintain / patch 挂钩
+  const allPatches = patchLib.listPatches(dataDir);
+  const plannedPatches = allPatches.filter((p) => p.status === 'planned' || (p.dryRun !== false && !p.appliedAt));
+  const pendingVerify = allPatches.filter((p) => p.status === 'fixed_pending_verify');
+  const regressed = allPatches.filter((p) => p.status === 'regressed');
+  const verifiedRecent = allPatches.filter(
+    (p) => p.status === 'verified' && startsWithDate(p.verify?.verifiedAt || p.appliedAt, dateKey),
+  );
+
+  // 本轮范围内可预览修候选（分诊）
+  const previewCandidates = [];
+  for (const item of ranked) {
+    let appInfo = null;
+    try {
+      if (item.robotUuid) appInfo = rpa.resolveXbotDir(item.robotUuid, { cfg, dataDir });
+    } catch {
+      appInfo = null;
+    }
+    const triage = classifyFix(item, { logs: [], appInfo });
+    if (canPreviewFix(triage)) {
+      const g = describeFixGuidance(triage, {
+        errorType: item.errorType,
+        suggestion: item.lastDiagnosis && item.lastDiagnosis.suggestion,
+      });
+      previewCandidates.push({
+        fingerprint: item.fingerprint,
+        robotName: item.robotName,
+        errorType: item.errorType,
+        fixClass: triage.fixClass,
+        fixability: triage.fixability,
+        title: g.title,
+      });
+    }
+  }
+
   lines.push('### 根因清单');
   lines.push('');
 
@@ -236,6 +274,7 @@ function buildDailyReport(cfg, options = {}) {
           : '已诊断'
         : '⏳ 待诊断';
       const n = pollCount(item);
+      const fixHint = item.fixStatus ? ` · 修复态 ${item.fixStatus}` : '';
 
       lines.push(`■ ${idx + 1}. ${title}${n > 1 ? `（本轮 ${n} 条）` : ''}`);
       lines.push(`  应用：${item.robotName || item.robotUuid || '未知'}`);
@@ -250,12 +289,79 @@ function buildDailyReport(cfg, options = {}) {
       );
       lines.push(`  建议：${suggestion}`);
       if (conf != null) lines.push(`  置信：${conf}`);
-      lines.push(`  状态：${status}`);
+      lines.push(`  状态：${status}${fixHint}`);
+      if (item.lastPatchId) lines.push(`  补丁：${item.lastPatchId}`);
       if (item.sampleJobUuids && item.sampleJobUuids[0]) {
         lines.push(`  样例 jobUuid：${item.sampleJobUuids[0]}`);
       }
       lines.push('');
     });
+  }
+
+  // S20 专节
+  lines.push('### 维护与补丁（maintain）');
+  lines.push('');
+  lines.push(
+    `- 可预览自动修候选：**${previewCandidates.length}**` +
+      ` · dry-run 预览补丁：**${plannedPatches.length}**` +
+      ` · 待验证：**${pendingVerify.length}**` +
+      ` · 复发：**${regressed.length}**` +
+      (verifiedRecent.length ? ` · 今日已验证：**${verifiedRecent.length}**` : ''),
+  );
+  lines.push('');
+
+  if (previewCandidates.length) {
+    lines.push('#### 可预览修候选（规则分诊）');
+    previewCandidates.slice(0, 15).forEach((c, i) => {
+      lines.push(
+        `${i + 1}. [${c.robotName || ''}] ${c.fingerprint} — ${c.title || c.fixClass}（${c.fixability}）`,
+      );
+      lines.push(
+        `   CLI：\`node monitor/agent.js maintain fix --fingerprint ${c.fingerprint}\`（默认 dry-run）`,
+      );
+    });
+    lines.push('');
+  }
+
+  if (plannedPatches.length) {
+    lines.push('#### 未处理 dry-run 补丁');
+    plannedPatches.slice(0, 15).forEach((p, i) => {
+      lines.push(
+        `${i + 1}. \`${p.patchId}\` · ${p.fingerprint || '—'} · ${p.fixerId || ''} · ${p.createdAt || ''}`,
+      );
+      lines.push(`   状态：${p.status}${p.dryRun !== false ? '（dry-run）' : ''}`);
+    });
+    lines.push('');
+  }
+
+  if (pendingVerify.length) {
+    lines.push('#### 待验证（fixed_pending_verify）');
+    pendingVerify.slice(0, 10).forEach((p, i) => {
+      lines.push(
+        `${i + 1}. \`${p.patchId}\` · ${p.fingerprint || '—'} · apply ${p.appliedAt || ''}`,
+      );
+    });
+    lines.push('');
+  }
+
+  if (regressed.length) {
+    lines.push('#### 复发（建议 rollback）');
+    regressed.slice(0, 10).forEach((p, i) => {
+      lines.push(
+        `${i + 1}. ⚠️ \`${p.patchId}\` · ${p.fingerprint || '—'} · \`maintain rollback --patch ${p.patchId}\``,
+      );
+    });
+    lines.push('');
+  }
+
+  if (
+    !previewCandidates.length &&
+    !plannedPatches.length &&
+    !pendingVerify.length &&
+    !regressed.length
+  ) {
+    lines.push('（暂无 maintain 候选或未处理补丁。）');
+    lines.push('');
   }
 
   lines.push('--');
@@ -283,6 +389,10 @@ function buildDailyReport(cfg, options = {}) {
       pending: pending.length,
       alerts: alerts.length,
       usedFallback,
+      previewCandidates: previewCandidates.length,
+      plannedPatches: plannedPatches.length,
+      pendingVerify: pendingVerify.length,
+      regressed: regressed.length,
     },
   };
 }

@@ -4,8 +4,9 @@
 
 const pythonIndexError = require('./python_index_error');
 const pythonNoneGuard = require('./python_none_guard');
+const pythonEmptyPath = require('./python_empty_path');
 
-const FIXERS = [pythonIndexError, pythonNoneGuard];
+const FIXERS = [pythonIndexError, pythonNoneGuard, pythonEmptyPath];
 
 /**
  * @param {object} ctx { text, working, fileContent, relativePath, absolutePath, diagnosis }

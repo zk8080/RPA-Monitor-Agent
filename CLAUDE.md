@@ -72,8 +72,10 @@ D:\RPA-Monitor-Agent  消费：监听 OpenAPI + 诊断 Agent + 日报 / KB
 - ✅ **S17 诊后 dry-run 存 patch**（`maintain.autoPlanOnDiagnose`，默认关；绝不 apply）  
 - ✅ **S18 修复验证闭环**（apply → pending_verify；新 job 同指纹 → regressed；静默期满 → verified）  
 - ✅ **S25b 工作台操作面**（一键 diagnose / fix dry-run；问题详情；patches API）  
+- ✅ **S20** 日报 maintain/patch 挂钩  
+- ✅ **S10a** KB-first（仅 confirmed，默认关）  
+- ✅ **S19** 空路径 py fixer（`python_empty_path`）  
 - ➡ **继续实现 backlog：** [TECH-DESIGN.md §十五](TECH-DESIGN.md)  
-  - **P1：** S19 / S20 / S10a  
   - **P2：** 跨应用 / fixOwner / 服务器源码策略 / develop 骨架  
   - **P3：** tool-loop / 对话入口（可选）  
   - **禁止：** service 默认 apply 生产 py；Web 复制平行业务栈  

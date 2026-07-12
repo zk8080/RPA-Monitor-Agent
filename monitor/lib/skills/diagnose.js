@@ -22,6 +22,62 @@ function isAutoPlanOnDiagnose(cfg) {
 }
 
 /**
+ * S10a：是否启用 KB-first（默认关）
+ */
+function isKbFirstEnabled(cfg, input = {}) {
+  if (input.kbFirst === false || input.noKbFirst === true) return false;
+  if (input.kbFirst === true) return true;
+  const d = (cfg && cfg.diagnose) || {};
+  if (d.kbFirst === true) return true;
+  if (process.env.DIAGNOSE_KB_FIRST === '1') return true;
+  return false;
+}
+
+function kbFirstMinConfidence(cfg) {
+  const d = (cfg && cfg.diagnose) || {};
+  const n = parseFloat(String(d.kbFirstMinConfidence != null ? d.kbFirstMinConfidence : 0.8));
+  return Number.isFinite(n) ? n : 0.8;
+}
+
+/**
+ * 仅 confirmed + 同 fingerprint + 高置信 可短路完整 diagnose
+ * @returns {{ diagnosis: object, kbEntry: object } | null}
+ */
+function tryKbFirst(history, working, cfg, input = {}) {
+  if (!isKbFirstEnabled(cfg, input)) return null;
+  if (!working || !working.fingerprint) return null;
+  const minConf = kbFirstMinConfidence(cfg);
+  const hit = (history || []).find(
+    (h) =>
+      h.status === 'confirmed' &&
+      h.fingerprint === working.fingerprint &&
+      (h.confidence == null || Number(h.confidence) >= minConf) &&
+      h.rootCause,
+  );
+  if (!hit) return null;
+
+  // 分诊仍用当前失败文本（便于 maintain 预览）
+  const triage = classifyFix(working, { logs: [], appInfo: null });
+  const diagnosis = {
+    rootCause: hit.rootCause,
+    location: hit.location || [working.robotName, working.flowName].filter(Boolean).join(' · '),
+    suggestion: hit.solution || hit.suggestion || '',
+    confidence: Number(hit.confidence != null ? hit.confidence : minConf),
+    errorCategory: hit.errorCategory || 'other',
+    relatedFingerprintHints: [],
+    kbAction: 'reuse',
+    reusedKbId: hit.id,
+    affectedBlocks: hit.affectedBlocks || [],
+    notes: `KB-first：复用已确认 ${hit.id}（confidence≥${minConf}），跳过完整 diagnose`,
+    source: 'kb-first',
+    fixClass: triage.fixClass,
+    fixability: triage.fixability,
+    fixTargets: triage.fixTargets,
+  };
+  return { diagnosis, kbEntry: hit };
+}
+
+/**
  * fixability=auto 且含 python 目标时，调用 maintain fix（默认 dry-run）存 patch
  * @returns {Promise<object|null>}
  */
@@ -201,7 +257,7 @@ async function runDiagnosePlaybook(input, cfg, options = {}) {
     };
   }
 
-  // 3) KB 检索（附带历史，不自动当最终结论）
+  // 3) KB 检索（附带历史；S10a 仅 confirmed 可短路）
   const kbHits = await step('kb_search', {
     fingerprint: working.fingerprint,
     errorSignature: working.errorSignature,
@@ -210,6 +266,85 @@ async function runDiagnosePlaybook(input, cfg, options = {}) {
     limit: 3,
   });
   const history = (kbHits && !kbHits.__error && kbHits.hits) || [];
+
+  // S10a：KB-first（仅 confirmed + 同 fingerprint + 高置信）
+  const kbFirstHit = tryKbFirst(history, working, cfg, input);
+  if (kbFirstHit) {
+    const diagnosis = kbFirstHit.diagnosis;
+    let kbEntry = kbFirstHit.kbEntry;
+    if (!options.dryRun) {
+      // 更新 lastSeen / occurrence，保持 confirmed，不降级为 pending_review
+      kbEntry = await step('kb_write', {
+        fingerprint: working.fingerprint,
+        errorSignature: working.errorSignature || kbEntry.errorSignature,
+        errorType: working.errorType || kbEntry.errorType,
+        elementName: working.elementName || kbEntry.elementName,
+        robotUuid: working.robotUuid || kbEntry.robotUuid,
+        robotName: working.robotName || kbEntry.robotName,
+        rootCause: diagnosis.rootCause,
+        solution: diagnosis.suggestion,
+        location: diagnosis.location,
+        errorCategory: diagnosis.errorCategory,
+        affectedBlocks: diagnosis.affectedBlocks || kbEntry.affectedBlocks || [],
+        confidence: diagnosis.confidence,
+        occurrenceCount: working.occurrenceCount || kbEntry.occurrenceCount || 1,
+        status: 'confirmed',
+        sourceJobUuids: working.sampleJobUuids || (jobUuid ? [jobUuid] : []),
+        notes: diagnosis.notes || kbEntry.notes || '',
+        kbAction: 'update',
+      });
+      if (working.fingerprint && kbEntry && !kbEntry.__error) {
+        memory.markQueueDiagnosed(cfg.dataDir, working.fingerprint, {
+          kbId: kbEntry.id,
+          diagnosis,
+        });
+      }
+    }
+    const autoPlan = await maybeAutoPlanPatch(working, diagnosis, cfg, options);
+    if (autoPlan && autoPlan.ok && autoPlan.message) {
+      toolTrace.push({
+        tool: 'auto_plan_on_diagnose',
+        ok: true,
+        patchId: autoPlan.patchId,
+        message: autoPlan.message,
+      });
+    }
+    return {
+      ok: true,
+      skill: 'diagnose',
+      stage: 'M1-min',
+      kbFirst: true,
+      diagnosis,
+      target: {
+        fingerprint: working.fingerprint,
+        robotUuid: working.robotUuid,
+        robotName: working.robotName,
+        flowName: working.flowName,
+        lineNumber: working.lineNumber,
+        errorType: working.errorType,
+        elementName: working.elementName,
+        occurrenceCount: working.occurrenceCount,
+        sampleJobUuids: working.sampleJobUuids,
+        rawRemark: working.rawRemark,
+      },
+      historyAttached: history.map((h) => ({
+        id: h.id,
+        score: h.score,
+        rootCause: h.rootCause,
+        solution: h.solution,
+        status: h.status,
+        confidence: h.confidence,
+      })),
+      appMapped: false,
+      appInfo: null,
+      flowContext: null,
+      blocksContext: null,
+      kb: kbEntry && !kbEntry.__error ? { id: kbEntry.id, status: kbEntry.status, path: `data/kb/${kbEntry.id}.json` } : kbEntry,
+      autoPlan: autoPlan || null,
+      toolTrace,
+      dryRun: Boolean(options.dryRun),
+    };
+  }
 
   // 4) resolve app + 可选 understand / load_blocks（rpa-skill）
   let appInfo = null;
@@ -583,4 +718,6 @@ module.exports = {
   buildRuleDiagnosis,
   isAutoPlanOnDiagnose,
   maybeAutoPlanPatch,
+  isKbFirstEnabled,
+  tryKbFirst,
 };

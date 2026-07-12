@@ -51,6 +51,14 @@ module.exports = {
   // anthropicModel: 'claude-sonnet-4-20250514',
   // anthropicBaseUrl: 'https://api.anthropic.com',
 
+  // ===== diagnose =====
+  diagnose: {
+    // S10a：仅 status=confirmed 且同 fingerprint、高置信时短路完整 diagnose
+    // 环境变量 DIAGNOSE_KB_FIRST=1 等价开启
+    kbFirst: false,
+    kbFirstMinConfidence: 0.8,
+  },
+
   // ===== maintain（巡检 / py 受控修复）=====
   maintain: {
     // S17：diagnose 完成后若 fixability=auto 且含 python，自动 dry-run 存 patch（绝不 apply）
@@ -62,7 +70,7 @@ module.exports = {
     },
     autoFix: {
       enabled: false, // 永不建议在 service 默认打开；写盘仅 CLI --apply
-      classes: ['code_boundary', 'null_guard'],
+      classes: ['code_boundary', 'null_guard', 'config'],
       requirePyCompile: true,
       requireValidate: false,
       maxFilesPerPatch: 1,

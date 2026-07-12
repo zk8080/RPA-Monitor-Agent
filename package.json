@@ -18,6 +18,7 @@
     "test:workbench": "node monitor/test_workbench.js",
     "test:maintain": "node monitor/test_maintain.js",
     "test:auto-plan": "node monitor/test_auto_plan.js",
-    "test:verify": "node monitor/test_verify.js"
+    "test:verify": "node monitor/test_verify.js",
+    "test:p1": "node monitor/test_p1_s20_s10a.js"
   }
 }

@@ -96,7 +96,8 @@ npm start
 | **S25b** 工作台操作面 | ✅（诊断 / 预览修复 / 问题详情） |
 | **S17** 诊后 dry-run 存 patch | ✅（`maintain.autoPlanOnDiagnose`，默认关） |
 | **S18** 修复验证闭环 | ✅（pending_verify / regressed / verified） |
-| S10 / S19+ 后续 | 见下表 |
+| **S20 / S10a / S19** P1 | ✅ 日报挂钩 · KB-first · 空路径 fixer |
+| S10b+ 后续 | 见下表 |
 | service 自动 apply | **永不默认** |
 
 ## 继续实现方向（backlog）
@@ -108,10 +109,10 @@ npm start
 | **P0** | **S25** ✅ | 本机工作台 Web MVP |
 | **P0** | **S17** ✅ | 诊后自动 **dry-run 存 patch**（`autoPlanOnDiagnose`） |
 | **P0** | **S18** ✅ | 修复验证闭环（复发 / verified） |
-| **P1** | **S19** | 更多 py fixer + LLM plan |
-| **P1** | **S20** | maintain 候选进日报 |
-| **P1** | **S10a** | KB-first（仅 confirmed） |
-| **P1** | **S25b** | 工作台操作面（一键 diagnose 等） |
+| **P1** | **S19** ✅ | 空路径 py fixer |
+| **P1** | **S20** ✅ | maintain 候选进日报 |
+| **P1** | **S10a** ✅ | KB-first（仅 confirmed） |
+| **P1** | **S25b** ✅ | 工作台操作面 |
 | **P2** | **S10b/c** | 跨应用归并、fixOwner 分诊 |
 | **P2** | **S21** | 服务器无 ShadowBot 时的源码策略 |
 | **P2** | **S22** | develop skill 骨架 |
