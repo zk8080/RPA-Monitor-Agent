@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>RPA Workbench</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;650&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <a class="skip-link" href="#content">跳到主要内容</a>
+
+  <div class="app">
+    <aside class="sidebar" aria-label="主导航">
+      <div class="sidebar-brand">
+        <div class="brand-mark" aria-hidden="true"></div>
+        <div>
+          <div class="logo">Workbench</div>
+          <p class="logo-note">RPA · Local</p>
+        </div>
+      </div>
+
+      <nav class="nav">
+        <div class="nav-section">工作区</div>
+        <a href="#/" data-nav="home" class="nav-link">
+          <span class="nav-dot" aria-hidden="true"></span>
+          总览
+        </a>
+        <a href="#/apps" data-nav="apps" class="nav-link">
+          <span class="nav-dot" aria-hidden="true"></span>
+          应用
+        </a>
+      </nav>
+
+      <div class="sidebar-bottom">
+        <div class="meta-label">Runtime</div>
+        <div id="rt-pill" class="status" role="status">连接中…</div>
+        <div id="rt-detail" class="status-detail"></div>
+        <div class="sidebar-actions">
+          <button type="button" id="btn-help" class="sidebar-link-btn">使用说明</button>
+          <a class="sidebar-link" href="/health" target="_blank" rel="noopener">health</a>
+        </div>
+      </div>
+    </aside>
+
+    <div class="main">
+      <header class="header">
+        <div class="header-text">
+          <p class="header-kicker" id="page-kicker">Workspace</p>
+          <h1 id="page-title">总览</h1>
+          <p id="page-desc" class="header-desc"></p>
+        </div>
+        <div class="header-actions">
+          <button type="button" id="btn-refresh" class="btn" title="重新加载当前页">刷新</button>
+        </div>
+      </header>
+
+      <div class="canvas">
+        <main id="content" class="content" tabindex="-1">
+          <div class="loading">加载中…</div>
+        </main>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>

@@ -10,6 +10,7 @@ const fingerprint = require('./fingerprint');
 const memory = require('./memory');
 const rpa = require('./rpa');
 const kb = require('./kb');
+const openPath = require('./http/open-path');
 const { loadConfig } = require('./config');
 
 /**
@@ -270,10 +271,31 @@ const TOOLS = [
   {
     name: 'scan_local_apps',
     description: '扫描本机 ShadowBot apps',
-    skills: ['maintain'],
+    skills: ['maintain', 'workbench'],
     inputSchema: { type: 'object', properties: {} },
     async handler(_input, ctx) {
       return rpa.scanLocalApps(ctx.cfg || loadConfig());
+    },
+  },
+  {
+    name: 'open_local_path',
+    description: '在本机打开已 resolve 的 xbot_robot 目录（仅 robotUuid，禁止任意路径）',
+    skills: ['maintain', 'workbench'],
+    inputSchema: {
+      type: 'object',
+      properties: {
+        robotUuid: { type: 'string' },
+      },
+      required: ['robotUuid'],
+    },
+    async handler(input, ctx) {
+      const cfg = ctx.cfg || loadConfig();
+      const wb = (cfg.workbench && typeof cfg.workbench === 'object' && cfg.workbench) || {};
+      return openPath.openRobotFolder(input.robotUuid, {
+        cfg,
+        enabled: wb.openFolderEnabled !== false,
+        openCommand: wb.openCommand || null,
+      });
     },
   },
 ];

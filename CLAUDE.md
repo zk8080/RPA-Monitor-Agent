@@ -10,6 +10,8 @@
 | [SPEC-monitor-agent.md](SPEC-monitor-agent.md) | 产品设计 |
 | [TECH-DESIGN.md](TECH-DESIGN.md) | 技术方案（**以实现对齐版为准**） |
 | [ARCHITECTURE-FREEZE.md](ARCHITECTURE-FREEZE.md) | **架构冻结 / 防漂（实现必遵）** |
+| [WEB-WORKBENCH-MVP.md](WEB-WORKBENCH-MVP.md) | **本机 Web 工作台 MVP 实现计划（S25）** |
+| [PRODUCT.md](PRODUCT.md) / [DESIGN.md](DESIGN.md) | **Web 工作台产品与视觉上下文（impeccable）** |
 | [DEPLOY.md](DEPLOY.md) | **服务器部署** |
 | [README.md](README.md) | 仓库说明 |
 
@@ -58,19 +60,22 @@ D:\RPA-Monitor-Agent  消费：监听 OpenAPI + 诊断 Agent + 日报 / KB
    - `node monitor/report.js`  
    - `node monitor/service.js --once`  
    - `node monitor/agent.js maintain inspect --robot <uuid>`  
-   - `node monitor/test_maintain.js`  
+   - `node monitor/test_maintain.js`
+   - `node monitor/test_workbench.js`  
 4. 密钥：`config.local.js` gitignore  
 
 ### 当前实现进度
 
 - ✅ S0–S9 + 部署  
 - ✅ S11–S16 maintain（巡检 + py 受控修；默认不 apply）  
+- ✅ **S25 本机工作台 Web MVP**（`http://127.0.0.1:8787/`；计划见 [WEB-WORKBENCH-MVP.md](WEB-WORKBENCH-MVP.md)）  
 - ➡ **继续实现 backlog：** [TECH-DESIGN.md §十五](TECH-DESIGN.md)  
   - **P0：** S17 诊后 dry-run 存 patch；S18 修复验证闭环  
-  - **P1：** S19 更多 fixer；S20 日报挂钩；S10a KB-first  
+  - **P1：** S25b 工作台操作面；S19 / S20 / S10a  
+  - **P1：** S19 更多 fixer；S20 日报挂钩；S10a KB-first；S25b 工作台操作面  
   - **P2：** 跨应用 / fixOwner / 服务器源码策略 / develop 骨架  
   - **P3：** tool-loop / 对话入口（可选）  
-  - **禁止：** service 默认 apply 生产 py  
+  - **禁止：** service 默认 apply 生产 py；Web 复制平行业务栈  
 
 
 

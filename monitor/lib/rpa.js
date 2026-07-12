@@ -298,18 +298,54 @@ function understandFlow(xbotDir, flowName, opts = {}) {
         warnings: project.warnings,
       };
     }
-    const report = analyze(project, { maxEdges: 30 });
+    // maxEdges 与 rpa-skill understand CLI 默认一致，保证有流程图
+    const report = analyze(project, { maxEdges: 50 });
+    const mg = report.mermaidGraph || null;
+    const cg = report.callGraph || null;
     return {
       ok: true,
       projectName: report.projectName,
       summary: report.summary,
       businessObjects: report.businessObjects,
-      stages: (report.stages || []).slice(0, 8),
-      flowRoles: (report.flowRoles || []).slice(0, 20),
+      inputs: report.inputs || [],
+      outputs: report.outputs || [],
+      stages: (report.stages || []).slice(0, 12),
+      flowRoles: (report.flowRoles || []).slice(0, 40),
       rules: (report.rules || []).slice(0, 10),
       warnings: report.warnings || [],
       errors: report.errors || [],
-      callStats: report.callGraph?.stats || null,
+      // 流程图：rpa-skill callGraph → mermaid（工作台渲染用）
+      mermaidGraph: mg
+        ? {
+            title: (mg.title || report.projectName || '') + '',
+            mermaid: mg.mermaid || '',
+            body: mg.body || '',
+            truncated: !!mg.truncated,
+            totalEdges: mg.totalEdges ?? null,
+            omitted: mg.omitted ?? 0,
+            edgeCount: mg.edgeCount ?? null,
+            nodeCount: mg.nodeCount ?? null,
+          }
+        : null,
+      callGraph: cg
+        ? {
+            stats: cg.stats || null,
+            edges: (cg.edges || []).slice(0, 80).map((e) => ({
+              type: e.type,
+              from: e.from,
+              to: e.to,
+              toKind: e.toKind,
+              enabled: e.enabled !== false,
+            })),
+            codeModules: (cg.codeModules || []).slice(0, 30).map((m) => ({
+              name: m.name || m.filename,
+              filename: m.filename,
+              pyExists: m.pyExists,
+              summary: m.summary || m.pySummary || '',
+            })),
+          }
+        : null,
+      callStats: cg?.stats || null,
     };
   } catch (e) {
     return {

@@ -58,6 +58,7 @@
 │  ┌─ Entrypoints（薄，禁止堆业务）───────────────────────┐ │
 │  │  agent.js     统一 Agent CLI（按 skill 路由）         │ │
 │  │  service.js   同一 Agent 的常驻 Runtime（M2）         │ │
+│  │  HTTP workbench  本机 Web 观察面（healthPort；薄路由） │ │
 │  │  poll.js      感知子系统 CLI 入口（薄封装）           │ │
 │  │  report.js    产出渲染入口（可被 Runtime 调度）       │ │
 │  │  verify_*.js  验收/探针，不进入产品主路径逻辑复制     │ │
@@ -66,7 +67,7 @@
 │  ┌─ Runtime / Scheduler（确定性触发）───────────────────┐ │
 │  │  poll → fingerprint → enqueue / alert                 │ │
 │  │  trigger skill: diagnose（及未来 develop/maintain）   │ │
-│  │  report / health                                      │ │
+│  │  report / health / workbench API（只读聚合 + 本机动作）│ │
 │  │  禁止：在调度层内联 OpenAPI HTTP 或诊断 prompt        │ │
 │  └──────────────────────────────────────────────────────┘ │
 │                          │                                 │
@@ -277,8 +278,9 @@ node monitor/report.js [--date YYYY-MM-DD]
 |----|------|---------------------------|
 | S0–S9 | 最小闭环 + 部署 | ✅ |
 | S11–S16 | maintain 巡检 + py 受控修 | ✅（默认不 auto-apply） |
+| S25 | 本机 Web 工作台 MVP | ✅ 总览/应用/understand/打开文件夹 |
 | S4 / S6 / S8 | 见 TECH-DESIGN | ✅ |
-| S10 / S17+ | 见 TECH-DESIGN §十五 backlog | 待做 |
+| S10 / S17+ / S25b | 见 TECH-DESIGN §十五 backlog | 待做 |
 
 
 

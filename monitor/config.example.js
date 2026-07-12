@@ -72,7 +72,16 @@ module.exports = {
   pollMaxPages: 50,
   diagnoseCron: '0 9 * * *',
   reportCron: '5 9 * * *',
+  // 0=关闭 HTTP；>0 时绑定 127.0.0.1：/health + 本机工作台 /
   healthPort: 8787,
+
+  // ===== 本机开发者工作台（S25）=====
+  workbench: {
+    enabled: true, // false：仅 /health，不挂 /api 与静态页
+    openFolderEnabled: true, // POST 打开 xbot 目录
+    understandCache: true, // data/cache/understand
+    // openCommand: null, // 可选：自定义打开命令，默认 Windows explorer
+  },
 
 
   // dataDir: 'D:/rpa-monitor-data',

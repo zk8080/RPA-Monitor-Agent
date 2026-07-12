@@ -735,11 +735,13 @@ Poll：`POLL_LOOKBACK_HOURS` / `POLL_MAX_PAGES`。
 
 | 优先级 | 编号 | 方向 | 交付物 | 验收要点 |
 |--------|------|------|--------|----------|
+| **P0** | **S25** ✅ | **本机开发者工作台 Web MVP** | 同进程 HTTP：总览 + 应用列表 + understand + 打开文件夹 | 浏览器走通主路径；只绑 127.0.0.1；业务走 lib/tools |
 | **P0** | **S17** | 诊后自动 **dry-run 存 patch** | diagnose/service 钩子：`fixability=auto` 时只 createPatch，不 apply | 诊断后 `data/patches/` 有预览；xbot **未改** |
 | **P0** | **S18** | 修复验证闭环 | 同 fingerprint 是否复发；KB `fixed` / `regressed` | 修后 N 次 poll 无同指纹 → verified；复发提示 rollback |
 | **P1** | **S19** | 更多 py fixer + LLM plan | 空路径等模板；复杂函数 LLM 出 diff 仍经 py_compile | 夹具 + 1～2 真实样例 dry-run |
 | **P1** | **S20** | maintain 进入日报 | report 附「可自动修候选 / 未处理 patch」 | 日报一节可读 |
 | **P1** | **S10a** | KB-first 短路 | 仅 `confirmed` 高置信跳过完整 diagnose | 开关；未确认永不短路 |
+| **P1** | **S25b** | 工作台操作面 | 一键 diagnose / maintain dry-run；问题详情页 | 仍走 runner；无平行业务栈 |
 | **P2** | **S10b** | 跨应用归并 | `errorSignature` + affectedApps | 报告一条根因多 app |
 | **P2** | **S10c** | 分诊标签 | `fixOwner`: business / developer / known | 进 diagnosis + 报告 |
 | **P2** | **S21** | 服务器流程源码策略 | 无 ShadowBot：共享盘 / app-map / 降级 | DEPLOY 专节 + 配置 |
@@ -749,7 +751,14 @@ Poll：`POLL_LOOKBACK_HOURS` / `POLL_MAX_PAGES`。
 
 ### 15.2 P0 说明（建议下一迭代）
 
-**S17 诊后 dry-run（推荐先做）**
+**S25 本机开发者工作台（当前推荐先做）**
+
+- 详设与任务拆分：[WEB-WORKBENCH-MVP.md](WEB-WORKBENCH-MVP.md)  
+- 形态：扩展 `service.js` 已有 `healthPort` HTTP → `/api/*` + 静态 `monitor/web/`  
+- 能力：总览、本机应用列表、rpa-skill understand、打开 `xbot_robot` 文件夹  
+- 约束：无登录；`127.0.0.1`；不复制 diagnose/scan 业务；不做运维 job 大盘  
+
+**S17 诊后 dry-run（S25 后或并行）**
 
 ```text
 diagnose 完成
@@ -790,5 +799,5 @@ maintain: {
 
 ---
 
-*文档状态：S0–S9 + maintain S11–S16 已交付；§十五为继续实现 backlog。*  
-*最后更新：2026-07-11*
+*文档状态：S0–S9 + maintain S11–S16 已交付；§十五为继续实现 backlog（含 S25 工作台）。*  
+*最后更新：2026-07-12*

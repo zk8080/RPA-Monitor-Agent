@@ -10,14 +10,13 @@
  *   node monitor/service.js --diagnose-limit 10
  */
 
-const http = require('http');
 const { loadConfig, requireYingdaoCredentials } = require('./lib/config');
 const { pollOnce } = require('./lib/poll');
 const { runSkill } = require('./lib/agent-runner');
 const { buildDailyReport } = require('./lib/report');
 const { acquireLock, releaseLock } = require('./lib/lock');
 const { cronMatchesNow, slotKey } = require('./lib/cron');
-const memory = require('./lib/memory');
+const { startHttpServer } = require('./lib/http/server');
 
 function parseArgs(argv) {
   const opts = {
@@ -58,7 +57,7 @@ function printHelp() {
   - 每 pollIntervalMinutes 执行 poll
   - 每轮 poll 后 drain 未诊断队列（limit）
   - diagnoseCron / reportCron（分 时 * * *）触发额外诊断/日报
-  - healthPort>0 时提供 GET /health
+  - healthPort>0 时提供 GET /health + 本机工作台 http://127.0.0.1:<port>/
   - data/service.pid 单实例锁
 `);
 }
@@ -106,39 +105,6 @@ async function runPipeline(cfg, opts, label = 'cycle') {
 
   return { pollResult, diagnoseResult, reportResult };
 }
-
-function startHealthServer(cfg, state) {
-  const port = parseInt(String(cfg.healthPort || 0), 10) || 0;
-  if (!port) {
-    log('health disabled (healthPort=0)');
-    return null;
-  }
-  const server = http.createServer((req, res) => {
-    if (req.url === '/health' || req.url === '/') {
-      const queue = memory.listQueueItems(cfg.dataDir);
-      const body = {
-        ok: true,
-        service: 'rpa-monitor-agent',
-        uptimeSec: Math.floor((Date.now() - state.startedAt) / 1000),
-        lastPollAt: state.lastPollAt,
-        lastDiagnoseAt: state.lastDiagnoseAt,
-        lastReportAt: state.lastReportAt,
-        queueDepth: queue.length,
-        undiagnosed: queue.filter((q) => !q.diagnosed).length,
-        pid: process.pid,
-        dataDir: cfg.dataDir,
-      };
-      res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
-      res.end(`${JSON.stringify(body, null, 2)}\n`);
-      return;
-    }
-    res.writeHead(404);
-    res.end('not found');
-  });
-  server.listen(port, '127.0.0.1', () => log(`health listening on http://127.0.0.1:${port}/health`));
-  return server;
-}
-
 
 (async () => {
   const opts = parseArgs(process.argv.slice(2));
@@ -199,7 +165,7 @@ function startHealthServer(cfg, state) {
       process.exit(result.pollResult ? 0 : 1);
     }
 
-    server = startHealthServer(cfg, state);
+    server = startHttpServer(cfg, state, { log });
     log(
       `service started pid=${process.pid} pollEvery=${cfg.pollIntervalMinutes}m ` +
         `diagnoseCron=${cfg.diagnoseCron} reportCron=${cfg.reportCron}`,

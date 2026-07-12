@@ -68,12 +68,31 @@ node monitor/agent.js maintain fix --fingerprint <fp> --apply
 node monitor/test_maintain.js   # 单元自检（临时目录）
 ```
 
+## 本机工作台（S25）
+
+常驻 Runtime 时自动挂载（`healthPort` 默认 8787，仅 `127.0.0.1`）：
+
+```bash
+npm start
+# 浏览器打开 http://127.0.0.1:8787/
+```
+
+| 页面 | 能力 |
+|------|------|
+| 总览 | 本机应用数、queue、runtime、问题应用 |
+| 应用列表 | ShadowBot 本机扫描 + 失败计数 |
+| 应用详情 | 流程 understand（rpa-skill）、打开文件夹、相关失败 |
+
+自检：`npm run test:workbench`  
+设计：[WEB-WORKBENCH-MVP.md](WEB-WORKBENCH-MVP.md)
+
 ## 当前进度
 
 | 范围 | 状态 |
 |------|------|
 | S0–S9 监听诊断 Runtime | ✅ |
 | S11–S16 maintain 巡检 + py 受控修 | ✅ |
+| **S25** 本机开发者工作台 Web MVP | ✅ 总览 / 应用 / understand / 打开文件夹 |
 | S10 / S17+ 后续 | 见下表（**未做**） |
 | service 自动 apply | **永不默认**；可选 S17 仅 dry-run |
 
@@ -83,11 +102,13 @@ node monitor/test_maintain.js   # 单元自检（临时目录）
 
 | 优先级 | 编号 | 方向 |
 |--------|------|------|
+| **P0** | **S25** ✅ | 本机工作台 Web MVP（总览 / 应用 / understand / 打开文件夹） |
 | **P0** | **S17** | 诊后自动 **dry-run 存 patch**（不写 xbot） |
 | **P0** | **S18** | 修复验证闭环（复发 / verified） |
 | **P1** | **S19** | 更多 py fixer + LLM plan |
 | **P1** | **S20** | maintain 候选进日报 |
 | **P1** | **S10a** | KB-first（仅 confirmed） |
+| **P1** | **S25b** | 工作台操作面（一键 diagnose 等） |
 | **P2** | **S10b/c** | 跨应用归并、fixOwner 分诊 |
 | **P2** | **S21** | 服务器无 ShadowBot 时的源码策略 |
 | **P2** | **S22** | develop skill 骨架 |
