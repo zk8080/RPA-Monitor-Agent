@@ -712,6 +712,7 @@
     const la = data.localApps || {};
     const q = data.queue || {};
     const problems = data.problemApps || [];
+    const cross = data.crossAppGroups || [];
     const und = q.undiagnosed ?? 0;
 
     content.innerHTML = `
@@ -728,11 +729,49 @@
           <div class="hint">未诊断 ${esc(und)}</div>
         </div>
         <div class="metric">
-          <div class="label">最近 poll</div>
-          <div class="value compact">${esc(relTime(rt.lastPollAt))}</div>
-          <div class="hint">详情见左侧 Agent</div>
+          <div class="label">跨应用根因</div>
+          <div class="value">${esc(cross.length)}</div>
+          <div class="hint">≥2 应用同特征</div>
         </div>
       </div>
+
+      ${
+        cross.length
+          ? `<div class="panel mb">
+        <h2>跨应用根因 <span class="meta">${cross.length}</span></h2>
+        <div class="list">${cross
+          .map((g) => {
+            const title =
+              g.rootCauseHint ||
+              [g.flowName, g.errorType, g.elementName].filter(Boolean).join(' · ') ||
+              g.errorSignature;
+            const apps = (g.affectedApps || [])
+              .map((a) => esc(a.robotName || a.robotUuid))
+              .join('、');
+            return `<div class="list-item">
+              <div class="item-main">
+                <div class="item-title">${esc(title)}</div>
+                <div class="item-sub wrap">${esc(g.appCount)} 个应用 · ${esc(apps)}</div>
+                <div class="item-sub mono">${esc(g.errorSignature)}</div>
+              </div>
+              <div class="item-side">
+                <div class="badges"><span class="badge danger">${esc(g.totalCount)} 条</span></div>
+                <div class="item-actions">
+                  ${
+                    g.sampleFingerprint
+                      ? `<a class="btn sm primary" href="#/findings/${encodeURIComponent(
+                          g.sampleFingerprint,
+                        )}">样例详情</a>`
+                      : ''
+                  }
+                </div>
+              </div>
+            </div>`;
+          })
+          .join('')}</div>
+      </div>`
+          : ''
+      }
 
       <div class="panel">
         <h2>需要关注 <span class="meta">${problems.length}</span></h2>
