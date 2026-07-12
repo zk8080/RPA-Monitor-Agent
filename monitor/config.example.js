@@ -93,10 +93,19 @@ module.exports = {
   // ===== 本机开发者工作台（S25）=====
   workbench: {
     enabled: true, // false：仅 /health，不挂 /api 与静态页
-    openFolderEnabled: true, // POST 打开 xbot 目录
+    openFolderEnabled: true, // POST 打开 xbot 目录 / open-agent
     understandCache: true, // data/cache/understand
     actionsEnabled: true, // S25b：Web 一键 diagnose / fix dry-run（永不 apply）
-    // openCommand: null, // 可选：自定义打开命令，默认 Windows explorer
+    // openCommand: null, // 可选：自定义打开文件夹命令，默认 Windows explorer
+    // agents：在 Coding Agent 打开（默认 cursor / vscode / qoder / claude / codex）
+    // 对象按 id 覆盖；false 禁用；或传数组全量替换
+    // agents: {
+    //   cursor: { command: 'cursor', args: ['{path}'] },
+    //   qoder: { command: 'qoder', args: ['{path}'] }, // CLI 名不同时可改
+    //   vscode: false, // 禁用
+    //   claude: { run: 'claude' },
+    //   windsurf: { label: 'Windsurf', kind: 'editor', command: 'windsurf', args: ['{path}'] },
+    // },
   },
 
 

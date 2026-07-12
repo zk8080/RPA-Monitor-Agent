@@ -29,8 +29,19 @@ function getWorkbenchConfig(cfg = {}) {
     openFolderEnabled: w.openFolderEnabled !== false,
     understandCache: w.understandCache !== false,
     openCommand: w.openCommand || null,
+    // 在 Cursor / Claude Code / Codex 等打开：array 全量，或 object 按 id 覆盖（false 禁用）
+    agents: w.agents != null ? w.agents : null,
     // S25b：Web 触发 skill（仅 dry-run fix；apply 永不从 Web）
     actionsEnabled: w.actionsEnabled !== false,
+  };
+}
+
+/** 可供 UI 展示的 Agent 列表 */
+function listOpenAgents(cfg) {
+  const wb = getWorkbenchConfig(cfg);
+  return {
+    ok: true,
+    agents: openPath.listAgents(wb.agents),
   };
 }
 
@@ -97,17 +108,23 @@ function buildOverview(cfg, state = {}) {
   const { scan, queueItems, queueStats } = bundle;
   const undiagnosed = queueItems.filter((q) => !q.diagnosed).length;
 
+  const localByUuid = new Map((scan.apps || []).map((a) => [a.robotUuid, a]));
   const problemApps = [...queueStats.values()]
     .filter((r) => r.robotUuid && r.robotUuid !== 'unknown')
     .sort((a, b) => String(b.lastSeen || '').localeCompare(String(a.lastSeen || '')))
     .slice(0, 10)
-    .map((r) => ({
-      robotUuid: r.robotUuid,
-      robotName: r.robotName,
-      failureCount: r.failureCount,
-      undiagnosedCount: r.undiagnosedCount,
-      lastSeen: r.lastSeen,
-    }));
+    .map((r) => {
+      const local = localByUuid.get(r.robotUuid);
+      return {
+        robotUuid: r.robotUuid,
+        robotName: r.robotName || (local && local.name) || r.robotUuid,
+        failureCount: r.failureCount,
+        undiagnosedCount: r.undiagnosedCount,
+        lastSeen: r.lastSeen,
+        // 附加字段：总览「复制路径」；旧客户端可忽略
+        xbotDir: (local && local.xbotDir) || null,
+      };
+    });
 
   // S10b：queue 全量按 errorSignature 归并（≥2 app）
   const crossAppGroups = mergeByErrorSignature(queueItems, { minApps: 2 }).slice(0, 12);
@@ -307,6 +324,18 @@ function getFindingDetail(fingerprint, cfg) {
 
   const enriched = enrichFailureItem(item, cfg);
 
+  let xbotDir = null;
+  let appName = item.robotName || '';
+  try {
+    if (item.robotUuid) {
+      const resolved = rpa.resolveXbotDir(item.robotUuid, { cfg, dataDir: cfg.dataDir });
+      xbotDir = resolved.xbotDir || null;
+      if (!appName) appName = resolved.name || '';
+    }
+  } catch {
+    xbotDir = null;
+  }
+
   return {
     ok: true,
     finding: item,
@@ -317,6 +346,9 @@ function getFindingDetail(fingerprint, cfg) {
       canPreviewFix: enriched.canPreviewFix,
     },
     guidance: enriched.guidance,
+    // 附加字段：失败详情「复制路径 / Agent 提示」；旧客户端可忽略
+    xbotDir,
+    appName: appName || null,
     kb: kbEntry
       ? {
           id: kbEntry.id,
@@ -688,6 +720,21 @@ function openAppFolder(robotUuid, cfg) {
 }
 
 /**
+ * 在配置的 Coding Agent 中打开应用目录（不 apply、不写 py）
+ * @param {string} robotUuid
+ * @param {string} agentId
+ * @param {object} cfg
+ */
+function openAppWithAgent(robotUuid, agentId, cfg) {
+  const wb = getWorkbenchConfig(cfg);
+  return openPath.openRobotWithAgent(robotUuid, agentId, {
+    cfg,
+    enabled: wb.openFolderEnabled,
+    agents: wb.agents,
+  });
+}
+
+/**
  * health JSON（兼容原 /health）
  */
 function buildHealth(cfg, state = {}) {
@@ -716,6 +763,8 @@ module.exports = {
   getAppDetail,
   getAppUnderstand,
   openAppFolder,
+  openAppWithAgent,
+  listOpenAgents,
   buildHealth,
   invalidateAppsCache,
   getAppsBundle,

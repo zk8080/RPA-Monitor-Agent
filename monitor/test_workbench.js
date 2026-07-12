@@ -157,6 +157,79 @@ const state = { startedAt: Date.now(), lastPollAt: null, lastDiagnoseAt: null, l
   const missing = await request(server, 'GET', '/api/nope');
   assert.strictEqual(missing.status, 404);
 
+  const agents = await request(server, 'GET', '/api/agents');
+  assert.strictEqual(agents.status, 200);
+  const agentsJson = JSON.parse(agents.body);
+  assert.strictEqual(agentsJson.ok, true);
+  assert.ok(Array.isArray(agentsJson.agents));
+  assert.ok(agentsJson.agents.some((a) => a.id === 'cursor'));
+  assert.ok(agentsJson.agents.some((a) => a.id === 'qoder'));
+
+  // open-agent：未知 agent / 未解析目录应 400，不崩溃
+  const openAgent = await new Promise((resolve, reject) => {
+    const addr = server.address();
+    const body = JSON.stringify({ agent: 'cursor' });
+    const req = http.request(
+      {
+        host: '127.0.0.1',
+        port: addr.port,
+        path: '/api/apps/no-such-robot/open-agent',
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'content-length': Buffer.byteLength(body),
+        },
+      },
+      (res) => {
+        const chunks = [];
+        res.on('data', (c) => chunks.push(c));
+        res.on('end', () => {
+          resolve({
+            status: res.statusCode,
+            body: Buffer.concat(chunks).toString('utf8'),
+          });
+        });
+      },
+    );
+    req.on('error', reject);
+    req.write(body);
+    req.end();
+  });
+  assert.ok(openAgent.status >= 400);
+  assert.strictEqual(JSON.parse(openAgent.body).ok, false);
+
+  const unknownAgent = await new Promise((resolve, reject) => {
+    const addr = server.address();
+    const body = JSON.stringify({ agent: 'not-a-real-agent' });
+    const req = http.request(
+      {
+        host: '127.0.0.1',
+        port: addr.port,
+        path: '/api/apps/r-demo/open-agent',
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'content-length': Buffer.byteLength(body),
+        },
+      },
+      (res) => {
+        const chunks = [];
+        res.on('data', (c) => chunks.push(c));
+        res.on('end', () => {
+          resolve({
+            status: res.statusCode,
+            body: Buffer.concat(chunks).toString('utf8'),
+          });
+        });
+      },
+    );
+    req.on('error', reject);
+    req.write(body);
+    req.end();
+  });
+  assert.strictEqual(unknownAgent.status, 400);
+  assert.strictEqual(JSON.parse(unknownAgent.body).code, 'unknown_agent');
+
   await new Promise((r) => server.close(r));
 
   // cleanup best-effort

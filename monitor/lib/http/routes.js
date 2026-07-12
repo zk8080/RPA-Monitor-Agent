@@ -155,6 +155,28 @@ async function handleRequest(req, res, ctx) {
         return true;
       }
 
+      // 在 Cursor / Claude Code / Codex 等打开（白名单 agent）
+      const appOpenAgent = pathname.match(/^\/api\/apps\/([^/]+)\/open-agent\/?$/);
+      if (method === 'POST' && appOpenAgent) {
+        const robotUuid = decodeURIComponent(appOpenAgent[1]);
+        let body = {};
+        try {
+          const raw = await readBody(req);
+          if (raw) body = JSON.parse(raw);
+        } catch {
+          body = {};
+        }
+        const agent = body.agent || body.agentId || '';
+        const result = workbench.openAppWithAgent(robotUuid, agent, cfg);
+        sendJson(res, result.ok ? 200 : result.code === 'disabled' ? 403 : 400, result);
+        return true;
+      }
+
+      if (method === 'GET' && pathname === '/api/agents') {
+        sendJson(res, 200, workbench.listOpenAgents(cfg));
+        return true;
+      }
+
       // S25b：失败详情
       const findingGet = pathname.match(/^\/api\/findings\/([^/]+)\/?$/);
       if (method === 'GET' && findingGet) {

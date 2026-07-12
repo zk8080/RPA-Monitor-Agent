@@ -9,13 +9,25 @@
   const toastEl = $('#toast');
 
   let toastTimer = null;
+  /** 当前页可复制的主路径（快捷键 c） */
+  let activeCopyPath = '';
+  /** 当前页 Agent 提示全文（快捷键 shift+c） */
+  let activeAgentPrompt = '';
+  /** GET /api/agents 缓存 */
+  let agentsCache = null;
+  let agentsCacheAt = 0;
+  const AGENTS_TTL_MS = 60 * 1000;
+  const LAST_AGENT_KEY = 'rpa_wb_last_agent';
 
-  function toast(msg) {
+  const RECENT_KEY = 'rpa_wb_recent_apps';
+  const RECENT_MAX = 6;
+
+  function toast(msg, ms = 2800) {
     if (!toastEl) return;
     toastEl.textContent = msg;
     toastEl.classList.add('show');
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => toastEl.classList.remove('show'), 2600);
+    toastTimer = setTimeout(() => toastEl.classList.remove('show'), ms);
   }
 
   function esc(s) {
@@ -41,6 +53,427 @@
     if (sec < 3600) return `${Math.floor(sec / 60)} 分钟前`;
     if (sec < 86400) return `${Math.floor(sec / 3600)} 小时前`;
     return `${Math.floor(sec / 86400)} 天前`;
+  }
+
+  function loadingHtml(label = '加载中…') {
+    return `<div class="loading-block" role="status" aria-live="polite">
+      <div class="skeleton-stack">
+        <div class="skeleton sk-line w-40"></div>
+        <div class="skeleton sk-line w-70"></div>
+        <div class="skeleton sk-line w-55"></div>
+      </div>
+      <p class="loading-label">${esc(label)}</p>
+    </div>`;
+  }
+
+  function getRecentApps() {
+    try {
+      const raw = JSON.parse(localStorage.getItem(RECENT_KEY) || '[]');
+      return Array.isArray(raw) ? raw.filter((x) => x && x.robotUuid).slice(0, RECENT_MAX) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function pushRecentApp(robotUuid, name) {
+    if (!robotUuid) return;
+    try {
+      const next = [
+        { robotUuid, name: name || robotUuid, at: Date.now() },
+        ...getRecentApps().filter((x) => x.robotUuid !== robotUuid),
+      ].slice(0, RECENT_MAX);
+      localStorage.setItem(RECENT_KEY, JSON.stringify(next));
+    } catch {
+      // ignore
+    }
+  }
+
+  /**
+   * Coding Agent 交接文案
+   * - mode: 'fix'     诊后修复（失败详情 / 列表「复制给 Agent」）
+   * - mode: 'develop'  日常开发 / 理解与维护（应用详情）
+   * 原则：问题包 + 打开工程 + 用 rpa-skill 理解；不 dump 全流程 JSON
+   *
+   * @param {{
+   *   mode?: 'fix'|'develop',
+   *   name?: string,
+   *   xbotDir?: string,
+   *   robotUuid?: string,
+   *   fingerprint?: string,
+   *   flowName?: string,
+   *   lineNumber?: string|number,
+   *   errorType?: string,
+   *   rawRemark?: string,
+   *   rootCause?: string,
+   *   suggestion?: string,
+   *   guidanceTitle?: string,
+   *   fixClass?: string,
+   *   fixability?: string,
+   *   taskNote?: string,
+   * }} ctx
+   */
+  function buildAgentPrompt(ctx = {}) {
+    // 有指纹默认 fix；显式 mode 优先
+    const effective =
+      ctx.mode === 'develop'
+        ? 'develop'
+        : ctx.mode === 'fix' || ctx.fingerprint
+          ? 'fix'
+          : 'develop';
+
+    if (effective === 'develop') {
+      return buildDevelopPrompt(ctx);
+    }
+    return buildFixPrompt(ctx);
+  }
+
+  function buildDevelopPrompt(ctx = {}) {
+    const lines = [
+      '# 任务 · 影刀 RPA 开发 / 维护',
+      '当前工作区应已是该应用的 xbot_robot 目录。请先理解流程结构，再按我的需求改代码；写盘前说明影响面并确认。',
+      '',
+      '## 工程',
+    ];
+    if (ctx.name) lines.push(`- 应用：${ctx.name}`);
+    if (ctx.robotUuid) lines.push(`- robotUuid：${ctx.robotUuid}`);
+    if (ctx.xbotDir) lines.push(`- 路径：${ctx.xbotDir}`);
+    if (ctx.taskNote) {
+      lines.push('', '## 本次需求', String(ctx.taskNote).slice(0, 800));
+    }
+
+    // 日常开发不附带失败队列 / 备注；失败现场只走 fix 模式
+
+    lines.push(
+      '',
+      '## 建议工作方式',
+      '1. 用 rpa skill 理解本项目：`/rpa understand`（结构）或 `/rpa inspect`（风险）',
+      '2. 对照 package.json / .dev 下流程与 Python 模块，理清主流程与子流程调用',
+      '3. 按需求做最小改动；生成或改写 .flow.json 时遵守 rpa skill 的确认门槛（IRON LAW）',
+      '4. 不要整库重写；不要假设其他未打开的应用目录',
+      '',
+      '## 不要做',
+      '- 不要把整份 .flow.json 再贴回对话当「理解结果」；以磁盘与 rpa skill 为准',
+      '- 不要整库重写；优先局部、可确认的改动',
+    );
+    return lines.join('\n');
+  }
+
+  function buildFixPrompt(ctx = {}) {
+    const lines = [
+      '# 任务 · 影刀 RPA 失败修复',
+      '当前工作区应已是该应用的 xbot_robot 目录。请根据下方「失败现场」定位并修复；先理解再改，写盘前说明影响面。',
+      '',
+      '## 工程',
+    ];
+    if (ctx.name) lines.push(`- 应用：${ctx.name}`);
+    if (ctx.robotUuid) lines.push(`- robotUuid：${ctx.robotUuid}`);
+    if (ctx.xbotDir) lines.push(`- 路径：${ctx.xbotDir}`);
+
+    lines.push('', '## 失败现场（来自 RPA Monitor，请优先对齐）');
+    if (ctx.fingerprint) lines.push(`- 指纹：${ctx.fingerprint}`);
+    if (ctx.flowName) {
+      const loc =
+        ctx.lineNumber != null && ctx.lineNumber !== ''
+          ? `${ctx.flowName}  L${ctx.lineNumber}`
+          : ctx.flowName;
+      lines.push(`- 流程位置：${loc}`);
+    }
+    if (ctx.errorType) lines.push(`- 错误类型：${ctx.errorType}`);
+    if (ctx.rawRemark) lines.push(`- 原始备注：${String(ctx.rawRemark).slice(0, 600)}`);
+    if (ctx.guidanceTitle || ctx.fixClass) {
+      lines.push(
+        `- 分诊：${[ctx.guidanceTitle, ctx.fixClass, ctx.fixability].filter(Boolean).join(' / ')}`,
+      );
+    }
+
+    if (ctx.rootCause || ctx.suggestion) {
+      lines.push('', '## Monitor 已有判断（可参考，需你核实）');
+      if (ctx.rootCause) lines.push(`- 根因：${String(ctx.rootCause).slice(0, 500)}`);
+      if (ctx.suggestion) lines.push(`- 建议：${String(ctx.suggestion).slice(0, 500)}`);
+    }
+
+    lines.push(
+      '',
+      '## 建议工作方式',
+      '1. 用 rpa skill 理解本项目：`/rpa understand`；若需结构风险可 `/rpa inspect`',
+      '2. 打开失败相关的 .flow.json / py，对照流程名与行号（行号可能对应块序号，以实际文件为准）',
+      '3. 给出最小改动方案；确认后再改文件',
+      '4. 修复后说明如何回归验证（重跑任务 / 看同指纹是否再出现）',
+      '',
+      '## 不要做',
+      '- 不要要求用户再粘贴整份流程 JSON；工程已在工作区，用 skill 或读文件理解',
+      '- 不要整库重写；优先局部修复',
+    );
+    return lines.join('\n');
+  }
+
+  function setActiveHandoff({ path = '', agentPrompt = '' } = {}) {
+    activeCopyPath = path || '';
+    activeAgentPrompt = agentPrompt || '';
+  }
+
+  async function loadAgents(force = false) {
+    const now = Date.now();
+    if (!force && agentsCache && now - agentsCacheAt < AGENTS_TTL_MS) {
+      return agentsCache;
+    }
+    try {
+      const data = await api('/api/agents');
+      if (data && data.ok && Array.isArray(data.agents)) {
+        agentsCache = data.agents;
+        agentsCacheAt = now;
+        return agentsCache;
+      }
+    } catch {
+      // ignore
+    }
+    // 离线兜底（与服务端默认一致）
+    agentsCache = [
+      { id: 'cursor', label: 'Cursor', kind: 'editor', hint: '' },
+      { id: 'vscode', label: 'VS Code', kind: 'editor', hint: '' },
+      { id: 'qoder', label: 'Qoder', kind: 'editor', hint: '' },
+      { id: 'claude', label: 'Claude Code', kind: 'terminal', hint: '' },
+      { id: 'codex', label: 'Codex', kind: 'terminal', hint: '' },
+    ];
+    agentsCacheAt = now;
+    return agentsCache;
+  }
+
+  function getLastAgentId(agents) {
+    try {
+      const last = localStorage.getItem(LAST_AGENT_KEY);
+      if (last && agents.some((a) => a.id === last)) return last;
+    } catch {
+      // ignore
+    }
+    return (agents[0] && agents[0].id) || 'cursor';
+  }
+
+  function setLastAgentId(id) {
+    try {
+      localStorage.setItem(LAST_AGENT_KEY, id);
+    } catch {
+      // ignore
+    }
+  }
+
+  /**
+   * 复制提示词（若有）并在本机用指定 Agent 打开 xbotDir
+   * @param {string} robotUuid
+   * @param {string} agentId
+   * @param {{ prompt?: string, label?: string, btn?: HTMLElement, hintEl?: HTMLElement }} [opts]
+   */
+  async function openInAgent(robotUuid, agentId, opts = {}) {
+    if (!robotUuid || !agentId) {
+      toast('缺少应用或 Agent');
+      return false;
+    }
+    const prompt = opts.prompt != null ? opts.prompt : activeAgentPrompt;
+    if (prompt) {
+      await copyTextQuiet(prompt);
+    }
+    const btn = opts.btn;
+    const hintEl = opts.hintEl || $('#open-hint');
+    if (btn) {
+      btn.disabled = true;
+      btn.classList.add('busy');
+    }
+    if (hintEl) hintEl.textContent = `正在用 ${opts.label || agentId} 打开…`;
+    try {
+      const r = await api(`/api/apps/${encodeURIComponent(robotUuid)}/open-agent`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ agent: agentId }),
+      });
+      if (r.ok) {
+        setLastAgentId(agentId);
+        const name = opts.label || agentId;
+        const pasteHint =
+          r.method === 'terminal-cmd' || r.method === 'terminal-osascript' || r.method === 'terminal-linux'
+            ? `已在终端启动 ${name}；提示词已复制，在对话里 Ctrl+V`
+            : `已请求用 ${name} 打开；提示词已复制，在 Chat 里 Ctrl+V`;
+        toast(pasteHint, 3600);
+        if (hintEl) {
+          hintEl.innerHTML = `${esc(pasteHint)} <span class="mono">${esc(r.opened || '')}</span>`;
+        }
+        return true;
+      }
+      const msg = r.message || r.code || '打开失败';
+      toast(msg);
+      if (hintEl) hintEl.innerHTML = `<span class="err">${esc(msg)}</span>`;
+      return false;
+    } catch (e) {
+      toast(e.message || '打开失败');
+      return false;
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.classList.remove('busy');
+      }
+    }
+  }
+
+  /**
+   * 「在 Agent 打开」分裂按钮 + 下拉
+   * @param {{ robotUuid: string, xbotDir?: string, agents?: object[], prompt?: string }} opts
+   */
+  function openAgentMenuHtml(opts = {}) {
+    const robotUuid = opts.robotUuid || '';
+    const xbotDir = opts.xbotDir || '';
+    const agents = opts.agents || [];
+    if (!robotUuid || !xbotDir || !agents.length) return '';
+    const lastId = getLastAgentId(agents);
+    const primary = agents.find((a) => a.id === lastId) || agents[0];
+    const menuId = `agent-menu-${Math.random().toString(36).slice(2, 8)}`;
+    return `<div class="split-btn" data-open-agent-wrap data-robot="${esc(robotUuid)}">
+      <button type="button" class="btn primary split-main" data-open-agent="${esc(primary.id)}" data-agent-label="${esc(
+        primary.label,
+      )}" title="${esc(primary.hint || primary.label)}">在 ${esc(primary.label)} 打开</button>
+      <button type="button" class="btn primary split-caret" data-agent-menu-toggle="${menuId}" aria-haspopup="menu" aria-expanded="false" aria-label="选择 Agent" title="选择 Agent">▾</button>
+      <div class="agent-menu" id="${menuId}" role="menu" hidden>
+        ${agents
+          .map(
+            (a) => `<button type="button" class="agent-menu-item" role="menuitem" data-open-agent="${esc(
+              a.id,
+            )}" data-agent-label="${esc(a.label)}" title="${esc(a.hint || '')}">
+              <span class="agent-menu-label">${esc(a.label)}</span>
+              <span class="agent-menu-kind">${esc(a.kind === 'terminal' ? '终端' : '编辑器')}</span>
+            </button>`,
+          )
+          .join('')}
+      </div>
+    </div>`;
+  }
+
+  function closeAllAgentMenus() {
+    document.querySelectorAll('.agent-menu').forEach((m) => {
+      m.hidden = true;
+    });
+    document.querySelectorAll('[data-agent-menu-toggle]').forEach((b) => {
+      b.setAttribute('aria-expanded', 'false');
+    });
+  }
+
+  function bindOpenAgentControls(root, { robotUuid, prompt = '' } = {}) {
+    const scope = root || document;
+    scope.querySelectorAll('[data-agent-menu-toggle]').forEach((btn) => {
+      if (btn._menuBound) return;
+      btn._menuBound = true;
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const id = btn.getAttribute('data-agent-menu-toggle');
+        const menu = id ? document.getElementById(id) : null;
+        if (!menu) return;
+        const open = menu.hidden;
+        closeAllAgentMenus();
+        if (open) {
+          menu.hidden = false;
+          btn.setAttribute('aria-expanded', 'true');
+        }
+      });
+    });
+    scope.querySelectorAll('[data-open-agent]').forEach((btn) => {
+      if (btn._openBound) return;
+      btn._openBound = true;
+      btn.addEventListener('click', async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const agentId = btn.getAttribute('data-open-agent');
+        const label = btn.getAttribute('data-agent-label') || agentId;
+        const wrap = btn.closest('[data-open-agent-wrap]');
+        const uuid = (wrap && wrap.getAttribute('data-robot')) || robotUuid;
+        closeAllAgentMenus();
+        // 更新主按钮文案为最近选择
+        if (wrap) {
+          const main = wrap.querySelector('.split-main');
+          if (main && agentId) {
+            main.setAttribute('data-open-agent', agentId);
+            main.setAttribute('data-agent-label', label);
+            main.textContent = `在 ${label} 打开`;
+          }
+        }
+        await openInAgent(uuid, agentId, {
+          prompt: prompt || activeAgentPrompt,
+          label,
+          btn: btn.classList.contains('split-main') ? btn : wrap && wrap.querySelector('.split-main'),
+        });
+      });
+    });
+  }
+
+  /**
+   * 主路径交接条：路径可点复制；唯一主按钮 = 在 Agent 打开（自动带提示词）
+   */
+  function handoffBarHtml({
+    xbotDir = '',
+    agentPrompt = '',
+    pathLabel = '本地路径',
+    compact = false,
+    robotUuid = '',
+    agents = null,
+  } = {}) {
+    const path = String(xbotDir || '');
+    const prompt = String(agentPrompt || '');
+    if (!path && !prompt) return '';
+    const openMenu =
+      robotUuid && path && agents && agents.length
+        ? openAgentMenuHtml({ robotUuid, xbotDir: path, agents, prompt })
+        : '';
+    return `<div class="handoff ${compact ? 'compact' : ''}" role="region" aria-label="交给 Coding Agent">
+      <div class="handoff-main">
+        <div class="handoff-label">${esc(pathLabel)}</div>
+        ${
+          path
+            ? `<button type="button" class="handoff-path" data-copy="${esc(path)}" data-copy-msg="路径已复制" title="点击复制路径">${esc(
+                path,
+              )}</button>`
+            : `<div class="handoff-path muted">未解析到 xbot_robot 路径</div>`
+        }
+        <p class="handoff-hint">打开后在 Chat 粘贴提示词（已自动复制）· 先 rpa understand，再改代码</p>
+      </div>
+      ${openMenu ? `<div class="handoff-actions">${openMenu}</div>` : ''}
+    </div>`;
+  }
+
+  function flashCopied(btn) {
+    if (!btn || !btn.classList) return;
+    const prev = btn.getAttribute('data-label-orig') || btn.textContent;
+    if (!btn.getAttribute('data-label-orig')) btn.setAttribute('data-label-orig', prev);
+    btn.classList.add('copied');
+    if (btn.tagName === 'BUTTON' && !btn.classList.contains('handoff-path')) {
+      btn.textContent = '已复制';
+    }
+    clearTimeout(btn._copyFlash);
+    btn._copyFlash = setTimeout(() => {
+      btn.classList.remove('copied');
+      if (btn.tagName === 'BUTTON' && !btn.classList.contains('handoff-path')) {
+        btn.textContent = btn.getAttribute('data-label-orig') || prev;
+      }
+    }, 1400);
+  }
+
+  /** copyText：okMsg 为 null 时静默（open-agent 会另发 toast） */
+  async function copyTextQuiet(text) {
+    const p = String(text || '');
+    if (!p) return false;
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(p);
+      } else {
+        const ta = document.createElement('textarea');
+        ta.value = p;
+        ta.style.position = 'fixed';
+        ta.style.left = '-9999px';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+      }
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   async function api(path, opts = {}) {
@@ -97,7 +530,7 @@
       // ignore
     }
     return `<div class="tip" id="first-run-tip" role="note">
-      <p><strong>怎么用：</strong>从「需要关注」或「应用」进入流程 → 看调用图 → <strong>复制路径</strong>，用 Coding Agent 打开本地工程。侧栏可看 Agent 是否在跑。</p>
+      <p><strong>主路径：</strong>找到应用或失败 → <strong>在 Agent 打开</strong> → Chat 里 Ctrl+V。快捷键 <kbd>/</kbd> 搜索。</p>
       <button type="button" class="btn sm" id="btn-dismiss-tip">知道了</button>
     </div>`;
   }
@@ -142,9 +575,11 @@
     }
   }
 
-  function failureActionsHtml(f, robotUuid) {
+  /**
+   * 失败列表侧栏：状态 + 进详情（操作只在详情页）
+   */
+  function failureActionsHtml(f) {
     const fp = f.fingerprint || '';
-    const remark = f.rawRemark || '';
     const diag = f.lastDiagnosis;
     const canPreview = f.canPreviewFix === true;
     const fixLabel = f.guidance?.title || f.fixClass || '';
@@ -159,7 +594,6 @@
               ? '<span class="badge">需人工</span>'
               : ''
         }
-        ${f.fixStatus ? `<span class="badge">${esc(f.fixStatus)}</span>` : ''}
         ${f.occurrenceCount ? `<span class="badge">${esc(f.occurrenceCount)} 次</span>` : ''}
       </div>
       ${
@@ -173,22 +607,7 @@
               )}</div>`
             : ''
       }
-      <div class="item-actions">
-        <a class="btn sm primary" href="#/findings/${encodeURIComponent(fp)}">详情</a>
-        <button type="button" class="btn sm" data-action="diagnose" data-fp="${esc(fp)}">诊断</button>
-        ${
-          canPreview
-            ? `<button type="button" class="btn sm" data-action="fix-dry-run" data-fp="${esc(fp)}">预览修复</button>`
-            : ''
-        }
-        <button type="button" class="btn sm" data-copy="${esc(fp)}" data-copy-msg="指纹已复制">复制指纹</button>
-        ${
-          remark
-            ? `<button type="button" class="btn sm" data-copy="${esc(remark)}" data-copy-msg="备注已复制">复制备注</button>`
-            : ''
-        }
-        <a class="btn sm" href="#/apps/${encodeURIComponent(robotUuid)}/flow">流程图</a>
-      </div>
+      <a class="item-go" href="#/findings/${encodeURIComponent(fp)}">详情 →</a>
     </div>`;
   }
 
@@ -211,11 +630,12 @@
     scope.querySelectorAll('[data-copy]').forEach((btn) => {
       if (btn._copyBound) return;
       btn._copyBound = true;
-      btn.addEventListener('click', (e) => {
+      btn.addEventListener('click', async (e) => {
         e.preventDefault();
         e.stopPropagation();
         const msg = btn.getAttribute('data-copy-msg') || '已复制';
-        copyText(btn.getAttribute('data-copy'), msg);
+        const ok = await copyText(btn.getAttribute('data-copy'), msg);
+        if (ok) flashCopied(btn);
       });
     });
   }
@@ -439,8 +859,9 @@
 
   async function renderReports() {
     setNav('reports');
-    setHeader('日报', 'data/reports 下的诊断日报（含 maintain 节）');
-    content.innerHTML = '<div class="loading">加载日报列表…</div>';
+    setHeader('日报', 'data/reports 下的诊断日报（含 maintain 节）· 可复制给 Coding Agent');
+    setActiveHandoff();
+    content.innerHTML = loadingHtml('加载日报列表…');
 
     const data = await api('/api/reports');
     if (!data.ok) {
@@ -502,8 +923,9 @@
 
   async function renderReport(date) {
     setNav('reports');
-    setHeader(`日报 ${date}`, 'Markdown 渲染');
-    content.innerHTML = '<div class="loading">加载日报…</div>';
+    setHeader(`日报 ${date}`, '复制全文后粘贴到 Coding Agent');
+    setActiveHandoff();
+    content.innerHTML = loadingHtml('加载日报…');
 
     const data = await api(`/api/reports/${encodeURIComponent(date)}`);
     if (!data.ok) {
@@ -534,18 +956,20 @@
       return;
     }
 
+    const agentWrap = [
+      `以下是 ${date} 的 RPA 诊断日报，请据此优先排查失败应用；需要改代码时先让我提供 xbot_robot 路径。`,
+      '',
+      data.markdown || '',
+    ].join('\n');
+    setActiveHandoff({ agentPrompt: agentWrap });
+
     content.innerHTML = `
       <div class="crumb"><a href="#/reports">日报</a> / ${esc(date)}</div>
       <div class="actions mb">
-        <button type="button" class="btn" id="btn-regen">重新生成</button>
-        <button type="button" class="btn ghost" id="btn-copy-md">复制 Markdown</button>
-        <a class="btn ghost" href="#/reports">全部日报</a>
+        <button type="button" class="btn primary" id="btn-copy-agent-md">复制全文</button>
+        <button type="button" class="btn ghost" id="btn-regen">重新生成</button>
       </div>
       <article class="panel report-md">${renderMarkdown(data.markdown)}</article>
-      <details class="panel mt fold">
-        <summary>原始 Markdown</summary>
-        <div class="pre mt">${esc(data.markdown)}</div>
-      </details>
     `;
     const regen = $('#btn-regen');
     if (regen) {
@@ -567,8 +991,13 @@
         }
       };
     }
-    const copyMd = $('#btn-copy-md');
-    if (copyMd) copyMd.onclick = () => copyText(data.markdown, 'Markdown 已复制');
+    const copyAgent = $('#btn-copy-agent-md');
+    if (copyAgent) {
+      copyAgent.onclick = async () => {
+        const ok = await copyText(agentWrap, '日报已复制');
+        if (ok) flashCopied(copyAgent);
+      };
+    }
   }
 
   async function refreshRuntime() {
@@ -615,7 +1044,7 @@
         document.execCommand('copy');
         document.body.removeChild(ta);
       }
-      toast(okMsg || '已复制');
+      if (okMsg !== null) toast(okMsg || '已复制');
       return true;
     } catch {
       toast('复制失败，请手动选择路径');
@@ -623,8 +1052,10 @@
     }
   }
 
-  function empty(title, body) {
-    return `<div class="empty"><strong>${esc(title)}</strong><p>${esc(body)}</p></div>`;
+  function empty(title, body, ctaHtml = '') {
+    return `<div class="empty"><strong>${esc(title)}</strong><p>${esc(body)}</p>${
+      ctaHtml ? `<div class="empty-cta">${ctaHtml}</div>` : ''
+    }</div>`;
   }
 
   function renderStages(stages) {
@@ -699,8 +1130,9 @@
   // ── Home ──
   async function renderHome() {
     setNav('home');
-    setHeader('总览', '从失败应用进入流程，或浏览本机全部应用');
-    content.innerHTML = '<div class="loading">加载中…</div>';
+    setHeader('总览', '从失败应用进入详情，再交给 Coding Agent');
+    setActiveHandoff();
+    content.innerHTML = loadingHtml('加载总览…');
 
     const data = await api('/api/overview');
     if (!data.ok) {
@@ -708,12 +1140,14 @@
       return;
     }
 
-    const rt = data.runtime || {};
     const la = data.localApps || {};
     const q = data.queue || {};
     const problems = data.problemApps || [];
     const cross = data.crossAppGroups || [];
     const und = q.undiagnosed ?? 0;
+    const recent = getRecentApps();
+
+    if (la.usersRoot) setActiveHandoff({ path: la.usersRoot });
 
     content.innerHTML = `
       ${firstRunTipHtml()}
@@ -736,6 +1170,24 @@
       </div>
 
       ${
+        recent.length
+          ? `<div class="panel mb">
+        <h2>最近打开 <span class="meta">${recent.length}</span></h2>
+        <div class="chip-row">
+          ${recent
+            .map(
+              (r) =>
+                `<a class="chip" href="#/apps/${encodeURIComponent(r.robotUuid)}">${esc(
+                  r.name || r.robotUuid,
+                )}</a>`,
+            )
+            .join('')}
+        </div>
+      </div>`
+          : ''
+      }
+
+      ${
         cross.length
           ? `<div class="panel mb">
         <h2>跨应用根因 <span class="meta">${cross.length}</span></h2>
@@ -748,7 +1200,11 @@
             const apps = (g.affectedApps || [])
               .map((a) => esc(a.robotName || a.robotUuid))
               .join('、');
-            return `<div class="list-item">
+            const sampleHref = g.sampleFingerprint
+              ? `#/findings/${encodeURIComponent(g.sampleFingerprint)}`
+              : '';
+            return sampleHref
+              ? `<a class="list-item" href="${sampleHref}">
               <div class="item-main">
                 <div class="item-title">${esc(title)}</div>
                 <div class="item-sub wrap">${esc(g.appCount)} 个应用 · ${esc(apps)}</div>
@@ -756,15 +1212,17 @@
               </div>
               <div class="item-side">
                 <div class="badges"><span class="badge danger">${esc(g.totalCount)} 条</span></div>
-                <div class="item-actions">
-                  ${
-                    g.sampleFingerprint
-                      ? `<a class="btn sm primary" href="#/findings/${encodeURIComponent(
-                          g.sampleFingerprint,
-                        )}">样例详情</a>`
-                      : ''
-                  }
-                </div>
+                <span class="item-go">样例 →</span>
+              </div>
+            </a>`
+              : `<div class="list-item">
+              <div class="item-main">
+                <div class="item-title">${esc(title)}</div>
+                <div class="item-sub wrap">${esc(g.appCount)} 个应用 · ${esc(apps)}</div>
+                <div class="item-sub mono">${esc(g.errorSignature)}</div>
+              </div>
+              <div class="item-side">
+                <div class="badges"><span class="badge danger">${esc(g.totalCount)} 条</span></div>
               </div>
             </div>`;
           })
@@ -778,8 +1236,9 @@
         ${
           problems.length
             ? `<div class="list">${problems
-                .map(
-                  (p) => `<a class="list-item" href="#/apps/${encodeURIComponent(p.robotUuid)}/flow">
+                .map((p) => {
+                  const href = `#/apps/${encodeURIComponent(p.robotUuid)}`;
+                  return `<a class="list-item" href="${href}">
                     <div class="item-main">
                       <div class="item-title">${esc(p.robotName || p.robotUuid)}</div>
                       <div class="item-sub">${esc(relTime(p.lastSeen))}</div>
@@ -793,33 +1252,32 @@
                             : ''
                         }
                       </div>
-                      <div class="item-actions">
-                        <span class="faint" style="font-size:12px">看流程 →</span>
-                      </div>
+                      <span class="item-go">打开 →</span>
                     </div>
-                  </a>`,
-                )
+                  </a>`;
+                })
                 .join('')}</div>`
-            : empty('没有需要处理的失败', 'queue 为空，或 Agent 尚未 poll。可先浏览全部应用。')
+            : empty(
+                '没有需要处理的失败',
+                'queue 为空，或 Agent 尚未 poll。可先浏览全部应用。',
+                '<a class="btn sm primary" href="#/apps">浏览全部应用</a>',
+              )
         }
         <div class="actions mt">
-          <a class="btn primary" href="#/apps">浏览全部应用</a>
-          <button type="button" class="btn" id="btn-copy-root">复制 ShadowBot 根路径</button>
+          <a class="btn" href="#/apps">全部应用</a>
         </div>
-        <p class="hint mono">${esc(la.usersRoot || '')}</p>
       </div>
     `;
 
-    const btn = $('#btn-copy-root');
-    if (btn) btn.onclick = () => copyText(la.usersRoot, '已复制根目录路径');
     bindFirstRunTip();
   }
 
   // ── Apps ──
   async function renderApps() {
     setNav('apps');
-    setHeader('应用', '搜索本机流程，打开路径或查看调用图');
-    content.innerHTML = '<div class="loading">扫描本机应用…</div>';
+    setHeader('应用', '搜索并打开本机流程');
+    setActiveHandoff();
+    content.innerHTML = loadingHtml('扫描本机应用…');
 
     const data = await api('/api/apps');
     if (!data.ok) {
@@ -868,11 +1326,11 @@
       listEl.innerHTML = rows
         .map((a) => {
           const href = `#/apps/${encodeURIComponent(a.robotUuid)}`;
-          return `<div class="list-item">
-            <a class="item-main" href="${href}" style="color:inherit;text-decoration:none">
+          return `<a class="list-item" href="${href}">
+            <div class="item-main">
               <div class="item-title">${esc(a.name || a.robotUuid)}</div>
               <div class="item-sub">${esc(shortPath(a.xbotDir, 56))}</div>
-            </a>
+            </div>
             <div class="item-side">
               <div class="badges">
                 ${
@@ -889,22 +1347,11 @@
               <div class="faint" style="font-size:11px">${
                 a.lastFailureAt ? esc(relTime(a.lastFailureAt)) : ''
               }</div>
-              <div class="item-actions">
-                <a class="btn sm" href="${href}/flow">流程图</a>
-                <button type="button" class="btn sm" data-copy="${esc(a.xbotDir || '')}">复制路径</button>
-              </div>
+              <span class="item-go">打开 →</span>
             </div>
-          </div>`;
+          </a>`;
         })
         .join('');
-
-      listEl.querySelectorAll('[data-copy]').forEach((btn) => {
-        btn.addEventListener('click', (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          copyText(btn.getAttribute('data-copy'), '路径已复制');
-        });
-      });
     }
 
     paint();
@@ -916,51 +1363,45 @@
   async function renderApp(robotUuid, tab = 'overview') {
     setNav('apps');
     setHeader('应用', '');
-    content.innerHTML = '<div class="loading">加载中…</div>';
+    setActiveHandoff();
+    content.innerHTML = loadingHtml('加载应用…');
 
-    const detail = await api(`/api/apps/${encodeURIComponent(robotUuid)}`);
+    const [detail, agents] = await Promise.all([
+      api(`/api/apps/${encodeURIComponent(robotUuid)}`),
+      loadAgents(),
+    ]);
     if (!detail.ok) {
       content.innerHTML = `<div class="err">加载失败：${esc(detail.message || detail.code)}</div>
         <p class="mt"><a href="#/apps">返回应用列表</a></p>`;
       return;
     }
 
+    pushRecentApp(robotUuid, detail.name || robotUuid);
+
+    const agentPrompt = buildAgentPrompt({
+      mode: 'develop',
+      name: detail.name || robotUuid,
+      xbotDir: detail.xbotDir || '',
+      robotUuid,
+    });
+    setActiveHandoff({ path: detail.xbotDir || '', agentPrompt });
+
     setHeader(
       detail.name || robotUuid,
-      `${detail.failureCount || 0} 失败 · ${detail.undiagnosedCount || 0} 未诊断 · 复制路径后用 Coding Agent 打开`,
+      `${detail.failureCount || 0} 失败 · ${detail.undiagnosedCount || 0} 未诊断`,
     );
 
     content.innerHTML = `
       <div class="crumb"><a href="#/apps">应用</a> / <span class="mono">${esc(robotUuid)}</span></div>
 
-      <div class="detail-top">
-        <div style="min-width:0;flex:1">
-          <div class="badges" style="justify-content:flex-start">
-            ${
-              detail.failureCount
-                ? `<span class="badge danger">${esc(detail.failureCount)} 失败</span>`
-                : ''
-            }
-            ${
-              detail.undiagnosedCount
-                ? `<span class="badge warn">${esc(detail.undiagnosedCount)} 未诊断</span>`
-                : ''
-            }
-            ${
-              detail.resolve?.source
-                ? `<span class="badge">${esc(detail.resolve.source)}</span>`
-                : ''
-            }
-          </div>
-          <div class="path" id="path-text">${esc(detail.xbotDir || '未解析到路径')}</div>
-          <div id="open-hint" class="hint"></div>
-        </div>
-        <div class="actions">
-          <button type="button" class="btn primary" id="btn-copy">复制路径</button>
-          <button type="button" class="btn" id="btn-open">打开文件夹</button>
-          <button type="button" class="btn ghost" id="btn-refresh-understand">刷新解析</button>
-        </div>
-      </div>
+      ${handoffBarHtml({
+        xbotDir: detail.xbotDir || '',
+        agentPrompt,
+        pathLabel: '开发 · 交给 Coding Agent',
+        robotUuid,
+        agents,
+      })}
+      <div id="open-hint" class="hint mb"></div>
 
       <div class="tabs" role="tablist" aria-label="应用分区">
         <button type="button" role="tab" id="tab-overview" class="tab ${
@@ -984,6 +1425,9 @@
       }"></div>
     `;
 
+    bindCopyButtons(content);
+    bindOpenAgentControls(content, { robotUuid, prompt: agentPrompt });
+
     const tabOrder = ['overview', 'flow', 'failures'];
     content.querySelectorAll('[data-tab]').forEach((btn) => {
       btn.onclick = () => {
@@ -1000,58 +1444,10 @@
         else if (e.key === 'End') next = tabOrder[tabOrder.length - 1];
         if (!next) return;
         e.preventDefault();
-        // remember we navigated by keyboard so route restores focus to tab
         sessionStorage.setItem('rpa_wb_focus_tab', next);
         location.hash = `#/apps/${encodeURIComponent(robotUuid)}/${next}`;
       };
     });
-
-    $('#btn-copy').onclick = () => copyText(detail.xbotDir, '路径已复制');
-    $('#btn-open').onclick = async () => {
-      const hint = $('#open-hint');
-      const openBtn = $('#btn-open');
-      hint.textContent = '正在打开…';
-      if (openBtn) {
-        openBtn.disabled = true;
-        openBtn.classList.add('busy');
-      }
-      try {
-        const r = await api(`/api/apps/${encodeURIComponent(robotUuid)}/open-folder`, {
-          method: 'POST',
-        });
-        if (r.ok) {
-          const opened = r.opened || detail.xbotDir || '';
-          hint.innerHTML = `已请求在资源管理器中打开。若无窗口，请用「复制路径」再粘贴。<span class="mono"> ${esc(
-            opened,
-          )}</span>`;
-          toast('已请求打开文件夹');
-          // 不自动写入剪贴板，避免冲掉用户正在用的内容
-        } else {
-          hint.innerHTML = `<span class="err">打开失败：${esc(r.message || r.code)}</span>
-            ${detail.xbotDir ? ' 已可复制下方路径。' : ''}`;
-          toast(r.message || '打开失败');
-          // 失败时才主动复制，方便兜底
-          if (detail.xbotDir) await copyText(detail.xbotDir, '路径已复制（打开失败时的兜底）');
-        }
-      } finally {
-        if (openBtn) {
-          openBtn.disabled = false;
-          openBtn.classList.remove('busy');
-        }
-      }
-    };
-    $('#btn-refresh-understand').onclick = async () => {
-      sessionStorage.setItem('rpa_wb_focus_tab', 'flow');
-      history.replaceState(null, '', `#/apps/${encodeURIComponent(robotUuid)}/flow`);
-      content.querySelectorAll('[data-tab]').forEach((b) => {
-        const on = b.getAttribute('data-tab') === 'flow';
-        b.classList.toggle('active', on);
-        b.setAttribute('aria-selected', on ? 'true' : 'false');
-        b.tabIndex = on ? 0 : -1;
-      });
-      await renderAppFlow(robotUuid, detail, true);
-      focusActiveTab('flow');
-    };
 
     const tabBody = $('#tab-body');
     if (tab === 'failures') renderAppFailures(tabBody, detail, robotUuid);
@@ -1089,25 +1485,21 @@
                           (f.rawRemark || '').slice(0, 120),
                         )}</div>
                       </div>
-                      ${failureActionsHtml(f, robotUuid)}
+                      ${failureActionsHtml(f)}
                     </div>`,
                   )
                   .join('')}</div>
                 <p class="hint">
                   <a href="#/apps/${encodeURIComponent(robotUuid)}/failures">全部问题</a>
-                  ·
-                  <a href="#/apps/${encodeURIComponent(robotUuid)}/flow">业务流程</a>
                 </p>`
-              : empty('暂无失败', '可直接查看业务流程。')
+              : empty('暂无失败', '可切换到「业务流程」查看调用图。')
           }
         </div>
       </div>
     `;
-    bindCopyButtons(tabBody);
-    bindActionButtons(tabBody);
   }
 
-  function renderAppFailures(tabBody, detail, robotUuid) {
+  function renderAppFailures(tabBody, detail) {
     const fails = detail.failures || [];
     tabBody.innerHTML = `
       <div class="panel">
@@ -1124,23 +1516,25 @@
                       )} · ${esc(relTime(f.lastSeen))}</div>
                       <div class="item-sub wrap">${esc((f.rawRemark || '').slice(0, 240))}</div>
                     </div>
-                    ${failureActionsHtml(f, robotUuid)}
+                    ${failureActionsHtml(f)}
                   </div>`,
                 )
                 .join('')}</div>`
             : empty('无失败记录', 'data/queue 中没有该应用条目。')
         }
       </div>`;
-    bindCopyButtons(tabBody);
-    bindActionButtons(tabBody);
   }
 
   async function renderFinding(fingerprint) {
     setNav('apps');
     setHeader('问题详情', fingerprint);
-    content.innerHTML = '<div class="loading">加载中…</div>';
+    setActiveHandoff();
+    content.innerHTML = loadingHtml('加载问题…');
 
-    const data = await api(`/api/findings/${encodeURIComponent(fingerprint)}`);
+    const [data, agents] = await Promise.all([
+      api(`/api/findings/${encodeURIComponent(fingerprint)}`),
+      loadAgents(),
+    ]);
     if (!data.ok) {
       content.innerHTML = `<div class="err">加载失败：${esc(data.message || data.code)}</div>
         <p class="mt"><a href="#/apps">返回应用</a></p>`;
@@ -1155,6 +1549,28 @@
     const canPreview = triage.canPreviewFix === true;
     const patches = data.patches || [];
     const robotUuid = f.robotUuid || '';
+    const xbotDir = data.xbotDir || '';
+    const appName = data.appName || f.robotName || robotUuid;
+
+    if (robotUuid) pushRecentApp(robotUuid, appName);
+
+    const agentPrompt = buildAgentPrompt({
+      mode: 'fix',
+      name: appName,
+      xbotDir,
+      robotUuid,
+      fingerprint,
+      flowName: f.flowName,
+      lineNumber: f.lineNumber,
+      errorType: f.errorType,
+      rawRemark: f.rawRemark,
+      rootCause: d.rootCause || k.rootCause,
+      suggestion: d.suggestion || k.solution,
+      guidanceTitle: g && g.title,
+      fixClass: triage.fixClass || (g && g.fixClass),
+      fixability: triage.fixability || (g && g.fixability),
+    });
+    setActiveHandoff({ path: xbotDir, agentPrompt });
 
     setHeader(
       f.robotName || fingerprint,
@@ -1167,35 +1583,41 @@
       <div class="crumb">
         <a href="#/apps">应用</a>
         ${robotUuid ? ` / <a href="#/apps/${encodeURIComponent(robotUuid)}">${esc(f.robotName || robotUuid)}</a>` : ''}
-        / <span class="mono">${esc(fingerprint)}</span>
+        / 问题
       </div>
 
-      <div class="detail-top">
-        <div style="min-width:0;flex:1">
-          <div class="badges" style="justify-content:flex-start">
-            ${f.diagnosed ? '<span class="badge ok">已诊断</span>' : '<span class="badge warn">未诊断</span>'}
-            ${g && g.title ? `<span class="badge">${esc(g.title)}</span>` : ''}
-            ${
-              canPreview
-                ? '<span class="badge ok">可预览修</span>'
-                : '<span class="badge">需人工</span>'
-            }
-            ${f.fixStatus ? `<span class="badge">${esc(f.fixStatus)}</span>` : ''}
-            ${f.occurrenceCount ? `<span class="badge">${esc(f.occurrenceCount)} 次</span>` : ''}
-          </div>
-          <div class="path mono">${esc(fingerprint)}</div>
-          <p class="hint">${esc((f.rawRemark || '').slice(0, 400))}</p>
+      ${handoffBarHtml({
+        xbotDir,
+        agentPrompt,
+        pathLabel: '修复 · 交给 Coding Agent',
+        robotUuid,
+        agents,
+      })}
+      <div id="open-hint" class="hint mb"></div>
+
+      <div class="panel">
+        <div class="badges" style="justify-content:flex-start;margin-bottom:10px">
+          ${f.diagnosed ? '<span class="badge ok">已诊断</span>' : '<span class="badge warn">未诊断</span>'}
+          ${g && g.title ? `<span class="badge">${esc(g.title)}</span>` : ''}
+          ${f.occurrenceCount ? `<span class="badge">${esc(f.occurrenceCount)} 次</span>` : ''}
         </div>
-        <div class="actions">
-          <button type="button" class="btn primary" data-action="diagnose" data-fp="${esc(fingerprint)}">诊断</button>
+        <p class="summary-line" style="margin-bottom:8px">${esc((f.rawRemark || '').slice(0, 400) || '无备注')}</p>
+        <div class="kv">
+          <div class="k">指纹</div><div class="v mono">${esc(fingerprint)}</div>
+          <div class="k">流程</div><div class="v">${esc(f.flowName || '—')} L${esc(f.lineNumber || '?')}</div>
+          <div class="k">错误</div><div class="v">${esc(f.errorType || '—')}</div>
+          <div class="k">分诊</div><div class="v">${esc(triage.fixClass || '—')} / ${esc(triage.fixability || '—')}</div>
+          <div class="k">最近</div><div class="v">${esc(relTime(f.lastSeen))}</div>
+        </div>
+        <div class="actions mt">
           ${
-            canPreview
-              ? `<button type="button" class="btn" data-action="fix-dry-run" data-fp="${esc(fingerprint)}">预览修复</button>`
+            !f.diagnosed
+              ? `<button type="button" class="btn" data-action="diagnose" data-fp="${esc(fingerprint)}">诊断</button>`
               : ''
           }
           ${
-            robotUuid
-              ? `<a class="btn ghost" href="#/apps/${encodeURIComponent(robotUuid)}/flow">流程图</a>`
+            canPreview
+              ? `<button type="button" class="btn ghost" data-action="fix-dry-run" data-fp="${esc(fingerprint)}">预览修复</button>`
               : ''
           }
         </div>
@@ -1203,84 +1625,62 @@
 
       ${renderGuidanceBlock(g)}
 
-      <div class="grid-2 mt">
-        <div class="panel">
+      ${
+        d.rootCause || k.rootCause
+          ? `<div class="panel mt">
           <h2>诊断结论</h2>
-          ${
-            d.rootCause || k.rootCause
-              ? `<div class="kv">
-                  <div class="k">根因</div><div class="v">${esc(d.rootCause || k.rootCause || '—')}</div>
-                  <div class="k">位置</div><div class="v">${esc(d.location || k.location || '—')}</div>
-                  <div class="k">建议</div><div class="v">${esc(d.suggestion || k.solution || '—')}</div>
-                  <div class="k">置信度</div><div class="v">${esc(d.confidence != null ? d.confidence : k.confidence ?? '—')}</div>
-                  <div class="k">类别</div><div class="v">${esc(d.errorCategory || k.errorCategory || '—')}</div>
-                </div>`
-              : empty('尚未诊断', '点击「诊断」生成结构化结论（规则，默认不调 LLM）。也可先看上方修复建议。')
-          }
-          ${k.id ? `<p class="hint mt">KB：${esc(k.id)} · ${esc(k.status || '')}</p>` : ''}
-        </div>
-        <div class="panel">
-          <h2>元数据</h2>
           <div class="kv">
-            <div class="k">应用</div><div class="v">${esc(f.robotName || '')}</div>
-            <div class="k">UUID</div><div class="v mono">${esc(robotUuid)}</div>
-            <div class="k">流程</div><div class="v">${esc(f.flowName || '—')} L${esc(f.lineNumber || '?')}</div>
-            <div class="k">错误</div><div class="v">${esc(f.errorType || '—')}</div>
-            <div class="k">分诊</div><div class="v">${esc(triage.fixClass || '—')} / ${esc(triage.fixability || '—')}</div>
-            <div class="k">最近</div><div class="v">${esc(relTime(f.lastSeen))}</div>
-            <div class="k">补丁</div><div class="v mono">${esc(f.lastPatchId || '—')}</div>
+            <div class="k">根因</div><div class="v">${esc(d.rootCause || k.rootCause || '—')}</div>
+            <div class="k">位置</div><div class="v">${esc(d.location || k.location || '—')}</div>
+            <div class="k">建议</div><div class="v">${esc(d.suggestion || k.solution || '—')}</div>
           </div>
-        </div>
-      </div>
+          ${k.id ? `<p class="hint mt">KB：${esc(k.id)}</p>` : ''}
+        </div>`
+          : !f.diagnosed
+            ? `<p class="hint mt">尚未诊断。需要结构化结论时再点「诊断」；主路径仍是上方「在 Agent 打开」。</p>`
+            : ''
+      }
 
-      <div class="panel mt">
+      ${
+        patches.length
+          ? `<div class="panel mt">
         <h2>相关补丁 <span class="meta">${patches.length}</span></h2>
-        ${
-          patches.length
-            ? `<div class="list">${patches
-                .map(
-                  (p) => `<div class="list-item">
-                    <div class="item-main">
-                      <div class="item-title mono">${esc(p.patchId)}</div>
-                      <div class="item-sub">${esc(p.status)} · ${esc(p.fixerId || '')} · ${esc(
-                        p.createdAt || '',
-                      )}</div>
-                    </div>
-                    <div class="item-side">
-                      <div class="badges">
-                        ${p.dryRun !== false && p.status === 'planned' ? '<span class="badge">dry-run</span>' : ''}
-                        <span class="badge">${esc(p.status)}</span>
-                      </div>
-                      <div class="item-actions">
-                        <button type="button" class="btn sm" data-patch="${esc(p.patchId)}">看 diff</button>
-                      </div>
-                    </div>
-                  </div>`,
-                )
-                .join('')}</div>
-              <div id="patch-diff-host" class="mt"></div>`
-            : empty('暂无补丁', '可点「预览修复」生成 dry-run patch（不写盘）。')
-        }
-      </div>
-      <div id="action-result" class="panel mt" style="display:none"></div>
+        <div class="list">${patches
+          .map(
+            (p) => `<div class="list-item">
+              <div class="item-main">
+                <div class="item-title mono">${esc(p.patchId)}</div>
+                <div class="item-sub">${esc(p.status)} · ${esc(p.fixerId || '')}</div>
+              </div>
+              <div class="item-side">
+                <button type="button" class="btn sm ghost" data-patch="${esc(p.patchId)}">diff</button>
+              </div>
+            </div>`,
+          )
+          .join('')}</div>
+        <div id="patch-diff-host" class="mt"></div>
+      </div>`
+          : ''
+      }
     `;
 
+    bindCopyButtons(content);
+    bindOpenAgentControls(content, { robotUuid, prompt: agentPrompt });
     bindActionButtons(content);
     content.querySelectorAll('[data-patch]').forEach((btn) => {
       btn.addEventListener('click', async () => {
         const id = btn.getAttribute('data-patch');
         const host = $('#patch-diff-host');
         if (!host) return;
-        host.innerHTML = '<div class="loading">加载 diff…</div>';
+        host.innerHTML = loadingHtml('加载 diff…');
         const pd = await api(`/api/patches/${encodeURIComponent(id)}`);
         if (!pd.ok) {
           host.innerHTML = `<div class="err">${esc(pd.message || pd.code)}</div>`;
           return;
         }
         host.innerHTML = `
-          <h2 style="margin:0 0 8px;font-size:13px;color:var(--text-3)">${esc(id)}</h2>
           <div class="pre">${esc(pd.diff || '(empty diff)')}</div>
-          <p class="hint">写盘请用 CLI：node monitor/agent.js maintain fix --fingerprint … --apply</p>`;
+          <p class="hint">写盘请用 CLI maintain fix --apply（Web 不 apply）</p>`;
       });
     });
   }
@@ -1288,14 +1688,19 @@
   async function renderAppFlow(robotUuid, detail, forceRefresh) {
     const tabBody = $('#tab-body');
     if (!tabBody) return;
-    tabBody.innerHTML = `<div class="panel"><div class="loading">正在解析流程${forceRefresh ? '（刷新）' : ''}…</div></div>`;
+    tabBody.innerHTML = `<div class="panel">${loadingHtml(
+      `正在解析流程${forceRefresh ? '（刷新）' : ''}…`,
+    )}</div>`;
 
     const u = await api(
       `/api/apps/${encodeURIComponent(robotUuid)}/understand${forceRefresh ? '?refresh=1' : ''}`,
     );
     if (!u.ok) {
       tabBody.innerHTML = `<div class="panel"><div class="err">解析失败：${esc(u.message || u.code)}</div>
-        <p class="hint">检查 rpaSkillPath 与本机 xbot 目录后，点「刷新解析」。</p></div>`;
+        <p class="hint">检查 rpaSkillPath 与本机 xbot 目录。可点下方「重新解析」。</p>
+        <div class="actions mt"><button type="button" class="btn sm" data-refresh-flow>重新解析</button></div></div>`;
+      const rb = tabBody.querySelector('[data-refresh-flow]');
+      if (rb) rb.onclick = () => renderAppFlow(robotUuid, detail, true);
       return;
     }
     const r = u.result || {};
@@ -1330,7 +1735,7 @@
             )}</p>
           </div>
           <div class="actions">
-            ${mermaidSrc ? '<button type="button" class="btn sm" id="btn-copy-mmd">复制 Mermaid</button>' : ''}
+            <button type="button" class="btn sm ghost" data-refresh-flow>重新解析</button>
           </div>
         </div>
         ${r.summary ? `<p class="summary-line">${esc(r.summary)}</p>` : ''}
@@ -1338,7 +1743,7 @@
           mermaidSrc
             ? `<div class="graph graph-hero"><div class="graph-host" id="mermaid-host"><div class="muted">渲染中…</div></div></div>
                <details class="raw"><summary>Mermaid 源码</summary><div class="pre mt">${esc(mermaidSrc)}</div></details>`
-            : empty('没有流程图', '点「刷新解析」重新生成。')
+            : empty('没有流程图', '可点「重新解析」。')
         }
       </div>
 
@@ -1412,8 +1817,8 @@
       </details>
     `;
 
-    const copyMmd = $('#btn-copy-mmd');
-    if (copyMmd) copyMmd.onclick = () => copyText(mermaidSrc, 'Mermaid 已复制');
+    const refreshBtn = tabBody.querySelector('[data-refresh-flow]');
+    if (refreshBtn) refreshBtn.onclick = () => renderAppFlow(robotUuid, detail, true);
     if (mermaidSrc) await renderMermaidInto($('#mermaid-host'), mermaidSrc);
   }
 
@@ -1464,6 +1869,14 @@
   const helpBtn = $('#btn-help');
   if (helpBtn) helpBtn.addEventListener('click', () => showHelpTip());
 
+  document.addEventListener('click', (e) => {
+    if (e.target && e.target.closest && e.target.closest('[data-open-agent-wrap]')) return;
+    closeAllAgentMenus();
+  });
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeAllAgentMenus();
+  });
+
   window.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
       const tip = $('#first-run-tip');
@@ -1477,9 +1890,30 @@
       }
       return;
     }
-    if (e.key !== '/' || e.metaKey || e.ctrlKey || e.altKey) return;
+
     const tag = (e.target && e.target.tagName) || '';
-    if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+    const typing =
+      tag === 'INPUT' ||
+      tag === 'TEXTAREA' ||
+      tag === 'SELECT' ||
+      (e.target && e.target.isContentEditable);
+
+    // c = 复制路径；Shift+C = 复制 Agent 提示
+    if (!typing && !e.metaKey && !e.ctrlKey && !e.altKey && (e.key === 'c' || e.key === 'C')) {
+      if (e.shiftKey && activeAgentPrompt) {
+        e.preventDefault();
+        copyText(activeAgentPrompt, 'Agent 提示已复制 · 粘贴到对话即可');
+        return;
+      }
+      if (!e.shiftKey && activeCopyPath) {
+        e.preventDefault();
+        copyText(activeCopyPath, '路径已复制 · 粘贴到 Coding Agent 打开');
+        return;
+      }
+    }
+
+    if (e.key !== '/' || e.metaKey || e.ctrlKey || e.altKey) return;
+    if (typing) return;
     const input = $('#app-filter');
     if (input) {
       e.preventDefault();
