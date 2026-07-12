@@ -68,11 +68,11 @@ D:\RPA-Monitor-Agent  消费：监听 OpenAPI + 诊断 Agent + 日报 / KB
 
 - ✅ S0–S9 + 部署  
 - ✅ S11–S16 maintain（巡检 + py 受控修；默认不 apply）  
-- ✅ **S25 本机工作台 Web MVP**（`http://127.0.0.1:8787/`；计划见 [WEB-WORKBENCH-MVP.md](WEB-WORKBENCH-MVP.md)）  
+- ✅ **S25 本机工作台 Web MVP**（`http://127.0.0.1:8787/`）  
+- ✅ **S17 诊后 dry-run 存 patch**（`maintain.autoPlanOnDiagnose`，默认关；绝不 apply）  
 - ➡ **继续实现 backlog：** [TECH-DESIGN.md §十五](TECH-DESIGN.md)  
-  - **P0：** S17 诊后 dry-run 存 patch；S18 修复验证闭环  
+  - **P0：** S18 修复验证闭环  
   - **P1：** S25b 工作台操作面；S19 / S20 / S10a  
-  - **P1：** S19 更多 fixer；S20 日报挂钩；S10a KB-first；S25b 工作台操作面  
   - **P2：** 跨应用 / fixOwner / 服务器源码策略 / develop 骨架  
   - **P3：** tool-loop / 对话入口（可选）  
   - **禁止：** service 默认 apply 生产 py；Web 复制平行业务栈  

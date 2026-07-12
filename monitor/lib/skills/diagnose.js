@@ -8,8 +8,90 @@ const memory = require('../memory');
 const kb = require('../kb');
 const llm = require('../llm');
 const { classifyFix } = require('../triage');
+const maintainSkill = require('./maintain');
 
+/**
+ * S17：诊后是否自动 dry-run 生成 patch 预览（绝不 apply）
+ * @param {object} cfg
+ */
+function isAutoPlanOnDiagnose(cfg) {
+  const m = (cfg && cfg.maintain) || {};
+  if (m.autoPlanOnDiagnose === true) return true;
+  if (process.env.MAINTAIN_AUTO_PLAN === '1') return true;
+  return false;
+}
 
+/**
+ * fixability=auto 且含 python 目标时，调用 maintain fix（默认 dry-run）存 patch
+ * @returns {Promise<object|null>}
+ */
+async function maybeAutoPlanPatch(working, diagnosis, cfg, options = {}) {
+  if (options.dryRun) return null;
+  if (!isAutoPlanOnDiagnose(cfg)) return null;
+  if (!diagnosis || diagnosis.fixability !== 'auto') {
+    return {
+      ok: false,
+      skipped: true,
+      reason: 'fixability_not_auto',
+      fixability: diagnosis && diagnosis.fixability,
+    };
+  }
+  const targets = diagnosis.fixTargets || [];
+  if (!targets.some((t) => t.type === 'python')) {
+    return { ok: false, skipped: true, reason: 'no_python_target' };
+  }
+  if (!working || !working.fingerprint) {
+    return { ok: false, skipped: true, reason: 'missing_fingerprint' };
+  }
+
+  try {
+    // 显式 dry-run：不传 apply / forceApply
+    const r = await maintainSkill.runMaintain(
+      {
+        action: 'fix',
+        fingerprint: working.fingerprint,
+        diagnosis,
+      },
+      cfg,
+    );
+    const patchId = (r.patch && (r.patch.patchId || r.patch.id)) || null;
+    if (r.ok && patchId) {
+      return {
+        ok: true,
+        dryRun: true,
+        applied: false,
+        patchId,
+        fixerId: r.fixerId || null,
+        fixClass: r.fixClass || diagnosis.fixClass,
+        message: `已生成补丁预览 ${patchId}（未写 xbot）`,
+        patch: r.patch
+          ? {
+              patchId,
+              dryRun: r.dryRun !== false,
+              fixerId: r.fixerId,
+              fixClass: r.fixClass,
+            }
+          : null,
+      };
+    }
+    return {
+      ok: false,
+      dryRun: true,
+      applied: false,
+      code: r.code || 'auto_plan_failed',
+      message: r.message || '诊后 dry-run patch 未生成',
+      patch: r.patch || null,
+    };
+  } catch (e) {
+    return {
+      ok: false,
+      dryRun: true,
+      applied: false,
+      code: 'auto_plan_error',
+      message: e.message || String(e),
+    };
+  }
+}
 
 /**
  * @param {object} input
@@ -211,6 +293,25 @@ async function runDiagnosePlaybook(input, cfg, options = {}) {
     }
   }
 
+  // 7) S17：可选诊后 dry-run 存 patch（绝不 apply）
+  const autoPlan = await maybeAutoPlanPatch(working, diagnosis, cfg, options);
+  if (autoPlan && autoPlan.ok && autoPlan.message) {
+    // 便于 service 日志直接看到
+    toolTrace.push({
+      tool: 'auto_plan_on_diagnose',
+      ok: true,
+      patchId: autoPlan.patchId,
+      message: autoPlan.message,
+    });
+  } else if (autoPlan && !autoPlan.skipped && !autoPlan.ok) {
+    toolTrace.push({
+      tool: 'auto_plan_on_diagnose',
+      ok: false,
+      code: autoPlan.code,
+      message: autoPlan.message,
+    });
+  }
+
   return {
     ok: true,
     skill: 'diagnose',
@@ -244,6 +345,7 @@ async function runDiagnosePlaybook(input, cfg, options = {}) {
       : blocksContext,
 
     kb: kbEntry && !kbEntry.__error ? { id: kbEntry.id, status: kbEntry.status, path: `data/kb/${kbEntry.id}.json` } : kbEntry,
+    autoPlan: autoPlan || null,
     toolTrace,
     dryRun: Boolean(options.dryRun),
   };
@@ -265,6 +367,15 @@ async function drainQueue(cfg, { limit = 5, dryRun = false } = {}) {
       kbId: r.kb && r.kb.id,
       rootCause: r.diagnosis && r.diagnosis.rootCause,
       confidence: r.diagnosis && r.diagnosis.confidence,
+      fixability: r.diagnosis && r.diagnosis.fixability,
+      autoPlan: r.autoPlan
+        ? {
+            ok: r.autoPlan.ok,
+            skipped: r.autoPlan.skipped,
+            patchId: r.autoPlan.patchId || null,
+            message: r.autoPlan.message || r.autoPlan.reason || null,
+          }
+        : null,
     });
   }
   return {
@@ -470,4 +581,6 @@ module.exports = {
   runDiagnosePlaybook,
   drainQueue,
   buildRuleDiagnosis,
+  isAutoPlanOnDiagnose,
+  maybeAutoPlanPatch,
 };

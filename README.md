@@ -92,9 +92,10 @@ npm start
 |------|------|
 | S0–S9 监听诊断 Runtime | ✅ |
 | S11–S16 maintain 巡检 + py 受控修 | ✅ |
-| **S25** 本机开发者工作台 Web MVP | ✅ 总览 / 应用 / understand / 打开文件夹 |
-| S10 / S17+ 后续 | 见下表（**未做**） |
-| service 自动 apply | **永不默认**；可选 S17 仅 dry-run |
+| **S25** 本机开发者工作台 Web MVP | ✅ |
+| **S17** 诊后 dry-run 存 patch | ✅（`maintain.autoPlanOnDiagnose`，默认关） |
+| S10 / S18+ 后续 | 见下表 |
+| service 自动 apply | **永不默认** |
 
 ## 继续实现方向（backlog）
 
@@ -102,8 +103,8 @@ npm start
 
 | 优先级 | 编号 | 方向 |
 |--------|------|------|
-| **P0** | **S25** ✅ | 本机工作台 Web MVP（总览 / 应用 / understand / 打开文件夹） |
-| **P0** | **S17** | 诊后自动 **dry-run 存 patch**（不写 xbot） |
+| **P0** | **S25** ✅ | 本机工作台 Web MVP |
+| **P0** | **S17** ✅ | 诊后自动 **dry-run 存 patch**（`autoPlanOnDiagnose`） |
 | **P0** | **S18** | 修复验证闭环（复发 / verified） |
 | **P1** | **S19** | 更多 py fixer + LLM plan |
 | **P1** | **S20** | maintain 候选进日报 |

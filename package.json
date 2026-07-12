@@ -16,6 +16,7 @@
     "test:fingerprint": "node monitor/test_fingerprint.js",
     "health": "node -e \"const p=process.env.HEALTH_PORT||8787;fetch('http://127.0.0.1:'+p+'/health').then(r=>r.text()).then(console.log).catch(e=>{console.error(e.message);process.exit(1)})\"",
     "test:workbench": "node monitor/test_workbench.js",
-    "test:maintain": "node monitor/test_maintain.js"
+    "test:maintain": "node monitor/test_maintain.js",
+    "test:auto-plan": "node monitor/test_auto_plan.js"
   }
 }

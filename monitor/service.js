@@ -91,6 +91,15 @@ async function runPipeline(cfg, opts, label = 'cycle') {
       log(
         `  diagnose processed=${diagnoseResult.processed ?? 1} remaining=${diagnoseResult.remaining ?? '?'}`,
       );
+      // S17：诊后 dry-run patch 摘要（若开启 autoPlanOnDiagnose）
+      const rows = diagnoseResult.results || [];
+      const planned = rows.filter((r) => r.autoPlan && r.autoPlan.ok && r.autoPlan.patchId);
+      if (planned.length) {
+        log(`  autoPlan patches=${planned.length}`);
+        planned.slice(0, 5).forEach((r) => {
+          log(`    patch ${r.autoPlan.patchId} fp=${r.fingerprint}`);
+        });
+      }
     } else {
       log(`  diagnose skip/fail: ${diagnoseResult.message || diagnoseResult.code}`);
     }

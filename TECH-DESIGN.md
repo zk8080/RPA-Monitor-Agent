@@ -736,7 +736,7 @@ Poll：`POLL_LOOKBACK_HOURS` / `POLL_MAX_PAGES`。
 | 优先级 | 编号 | 方向 | 交付物 | 验收要点 |
 |--------|------|------|--------|----------|
 | **P0** | **S25** ✅ | **本机开发者工作台 Web MVP** | 同进程 HTTP：总览 + 应用列表 + understand + 打开文件夹 | 浏览器走通主路径；只绑 127.0.0.1；业务走 lib/tools |
-| **P0** | **S17** | 诊后自动 **dry-run 存 patch** | diagnose/service 钩子：`fixability=auto` 时只 createPatch，不 apply | 诊断后 `data/patches/` 有预览；xbot **未改** |
+| **P0** | **S17** ✅ | 诊后自动 **dry-run 存 patch** | `maintain.autoPlanOnDiagnose`：fixability=auto 时 maintain fix dry-run | 开启后诊断结果含 autoPlan.patchId；xbot **未改** |
 | **P0** | **S18** | 修复验证闭环 | 同 fingerprint 是否复发；KB `fixed` / `regressed` | 修后 N 次 poll 无同指纹 → verified；复发提示 rollback |
 | **P1** | **S19** | 更多 py fixer + LLM plan | 空路径等模板；复杂函数 LLM 出 diff 仍经 py_compile | 夹具 + 1～2 真实样例 dry-run |
 | **P1** | **S20** | maintain 进入日报 | report 附「可自动修候选 / 未处理 patch」 | 日报一节可读 |
@@ -749,26 +749,20 @@ Poll：`POLL_LOOKBACK_HOURS` / `POLL_MAX_PAGES`。
 | **P3** | **S23** | maintain tool-loop（可选） | 模型多步读 py/日志，写盘仍白名单 | opt-in；默认 playbook |
 | **P3** | **S24** | 对话式入口（可选） | 「修这个 fingerprint」→ 同一 runner | 不替代 CLI/service |
 
-### 15.2 P0 说明（建议下一迭代）
+### 15.2 P0 说明
 
-**S25 本机开发者工作台（当前推荐先做）**
-
-- 详设与任务拆分：[WEB-WORKBENCH-MVP.md](WEB-WORKBENCH-MVP.md)  
-- 形态：扩展 `service.js` 已有 `healthPort` HTTP → `/api/*` + 静态 `monitor/web/`  
-- 能力：总览、本机应用列表、rpa-skill understand、打开 `xbot_robot` 文件夹  
-- 约束：无登录；`127.0.0.1`；不复制 diagnose/scan 业务；不做运维 job 大盘  
-
-**S17 诊后 dry-run（S25 后或并行）**
+**S17 诊后 dry-run（已实现）**
 
 ```text
 diagnose 完成
+  → maintain.autoPlanOnDiagnose=true（或 MAINTAIN_AUTO_PLAN=1）
   → fixability==auto 且 fixTargets 含 python
-  → maintain plan（fixer）→ patch.create（dryRun=true）
-  → 日志：「已生成补丁预览 patch-xxx」
-  → 绝不自动 apply
+  → maintain fix（dry-run）→ data/patches/patch-xxx
+  → 结果字段 autoPlan.patchId；日志「已生成补丁预览」
+  → 绝不自动 apply（autoFix.enabled 仍默认 false）
 ```
 
-配置建议：
+配置：
 
 ```js
 maintain: {
@@ -777,7 +771,7 @@ maintain: {
 }
 ```
 
-**S18 验证闭环**
+**S18 验证闭环（待做）**
 
 - apply 后记 `patchId`、`status=fixed_pending_verify`  
 - 后续 poll 同 fingerprint 再出现 → `regressed` + 建议 rollback  

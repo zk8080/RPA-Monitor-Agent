@@ -53,8 +53,11 @@ module.exports = {
 
   // ===== maintain（巡检 / py 受控修复）=====
   maintain: {
+    // S17：diagnose 完成后若 fixability=auto 且含 python，自动 dry-run 存 patch（绝不 apply）
+    // 也可用环境变量 MAINTAIN_AUTO_PLAN=1
+    autoPlanOnDiagnose: false,
     autoFix: {
-      enabled: false,
+      enabled: false, // 永不建议在 service 默认打开；写盘仅 CLI --apply
       classes: ['code_boundary', 'null_guard'],
       requirePyCompile: true,
       requireValidate: false,
