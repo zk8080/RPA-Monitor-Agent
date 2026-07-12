@@ -84,7 +84,9 @@
             ? 'Application'
             : route.name === 'finding'
               ? 'Finding'
-              : 'Workspace';
+              : route.name === 'reports' || route.name === 'report'
+                ? 'Reports'
+                : 'Workspace';
     }
   }
 
@@ -300,6 +302,10 @@
     if (parts[0] === 'findings' && parts[1]) {
       return { name: 'finding', fingerprint: decodeURIComponent(parts[1]) };
     }
+    if (parts[0] === 'reports' && parts[1]) {
+      return { name: 'report', date: decodeURIComponent(parts[1]) };
+    }
+    if (parts[0] === 'reports') return { name: 'reports' };
     if (parts[0] === 'apps' && parts[1]) {
       return {
         name: 'app',
@@ -309,6 +315,260 @@
     }
     if (parts[0] === 'apps') return { name: 'apps' };
     return { name: 'home' };
+  }
+
+  /** 极简 Markdown → HTML（日报足够；不做完整 CommonMark） */
+  function renderMarkdown(md) {
+    const escHtml = (s) =>
+      String(s ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+    const inline = (s) => {
+      let t = escHtml(s);
+      t = t.replace(/`([^`]+)`/g, '<code>$1</code>');
+      t = t.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+      t = t.replace(
+        /\[([^\]]+)\]\((https?:[^)\s]+)\)/g,
+        '<a href="$2" target="_blank" rel="noopener">$1</a>',
+      );
+      return t;
+    };
+    const lines = String(md || '').replace(/\r\n/g, '\n').split('\n');
+    const out = [];
+    let inUl = false;
+    let inOl = false;
+    let inPre = false;
+    let preBuf = [];
+
+    const closeLists = () => {
+      if (inUl) {
+        out.push('</ul>');
+        inUl = false;
+      }
+      if (inOl) {
+        out.push('</ol>');
+        inOl = false;
+      }
+    };
+
+    for (let i = 0; i < lines.length; i += 1) {
+      const line = lines[i];
+      if (line.trim().startsWith('```')) {
+        if (inPre) {
+          out.push(`<pre class="md-pre"><code>${escHtml(preBuf.join('\n'))}</code></pre>`);
+          preBuf = [];
+          inPre = false;
+        } else {
+          closeLists();
+          inPre = true;
+        }
+        continue;
+      }
+      if (inPre) {
+        preBuf.push(line);
+        continue;
+      }
+      if (!line.trim()) {
+        closeLists();
+        continue;
+      }
+      if (/^###\s+/.test(line)) {
+        closeLists();
+        out.push(`<h3>${inline(line.replace(/^###\s+/, ''))}</h3>`);
+        continue;
+      }
+      if (/^##\s+/.test(line)) {
+        closeLists();
+        out.push(`<h2>${inline(line.replace(/^##\s+/, ''))}</h2>`);
+        continue;
+      }
+      if (/^#\s+/.test(line)) {
+        closeLists();
+        out.push(`<h1>${inline(line.replace(/^#\s+/, ''))}</h1>`);
+        continue;
+      }
+      if (/^>\s?/.test(line)) {
+        closeLists();
+        out.push(`<blockquote>${inline(line.replace(/^>\s?/, ''))}</blockquote>`);
+        continue;
+      }
+      if (/^[-*]\s+/.test(line)) {
+        if (inOl) {
+          out.push('</ol>');
+          inOl = false;
+        }
+        if (!inUl) {
+          out.push('<ul>');
+          inUl = true;
+        }
+        out.push(`<li>${inline(line.replace(/^[-*]\s+/, ''))}</li>`);
+        continue;
+      }
+      if (/^\d+\.\s+/.test(line)) {
+        if (inUl) {
+          out.push('</ul>');
+          inUl = false;
+        }
+        if (!inOl) {
+          out.push('<ol>');
+          inOl = true;
+        }
+        out.push(`<li>${inline(line.replace(/^\d+\.\s+/, ''))}</li>`);
+        continue;
+      }
+      if (/^---+$/.test(line.trim()) || /^--+$/.test(line.trim())) {
+        closeLists();
+        out.push('<hr />');
+        continue;
+      }
+      closeLists();
+      // 日报习惯行：■ 1. ...
+      if (/^■\s+/.test(line) || /^_{1}.+_{1}$/.test(line.trim())) {
+        out.push(`<p class="md-item">${inline(line)}</p>`);
+      } else {
+        out.push(`<p>${inline(line)}</p>`);
+      }
+    }
+    closeLists();
+    if (inPre) {
+      out.push(`<pre class="md-pre"><code>${escHtml(preBuf.join('\n'))}</code></pre>`);
+    }
+    return out.join('\n');
+  }
+
+  async function renderReports() {
+    setNav('reports');
+    setHeader('日报', 'data/reports 下的诊断日报（含 maintain 节）');
+    content.innerHTML = '<div class="loading">加载日报列表…</div>';
+
+    const data = await api('/api/reports');
+    if (!data.ok) {
+      content.innerHTML = `<div class="err">加载失败：${esc(data.message || data.code)}</div>`;
+      return;
+    }
+    const list = data.reports || [];
+    content.innerHTML = `
+      <div class="actions mb">
+        <button type="button" class="btn primary" id="btn-gen-report">生成今日日报</button>
+        <span class="hint">来自 ${esc(data.reportsDir || 'data/reports')}</span>
+      </div>
+      <div class="panel">
+        <h2>历史日报 <span class="meta">${list.length}</span></h2>
+        ${
+          list.length
+            ? `<div class="list">${list
+                .map(
+                  (r) => `<a class="list-item" href="#/reports/${encodeURIComponent(r.date)}">
+                    <div class="item-main">
+                      <div class="item-title">${esc(r.date)}</div>
+                      <div class="item-sub">${esc(r.mtime || '')} · ${esc(r.size || 0)} bytes</div>
+                    </div>
+                    <div class="item-side"><span class="faint" style="font-size:12px">查看 →</span></div>
+                  </a>`,
+                )
+                .join('')}</div>`
+            : empty('还没有日报文件', '点击「生成今日日报」，或运行 node monitor/report.js')
+        }
+      </div>
+    `;
+    const gen = $('#btn-gen-report');
+    if (gen) {
+      gen.onclick = async () => {
+        gen.disabled = true;
+        gen.textContent = '生成中…';
+        try {
+          const r = await api('/api/reports/generate', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: '{}',
+          });
+          if (r.ok) {
+            toast(`已生成 ${r.date}`);
+            location.hash = `#/reports/${encodeURIComponent(r.date)}`;
+          } else {
+            toast(r.message || r.code || '生成失败');
+            gen.disabled = false;
+            gen.textContent = '生成今日日报';
+          }
+        } catch (e) {
+          toast(e.message || '生成失败');
+          gen.disabled = false;
+          gen.textContent = '生成今日日报';
+        }
+      };
+    }
+  }
+
+  async function renderReport(date) {
+    setNav('reports');
+    setHeader(`日报 ${date}`, 'Markdown 渲染');
+    content.innerHTML = '<div class="loading">加载日报…</div>';
+
+    const data = await api(`/api/reports/${encodeURIComponent(date)}`);
+    if (!data.ok) {
+      content.innerHTML = `
+        <div class="err">${esc(data.message || data.code)}</div>
+        <div class="actions mt">
+          <button type="button" class="btn primary" id="btn-gen-this">生成该日日报</button>
+          <a class="btn ghost" href="#/reports">返回列表</a>
+        </div>`;
+      const b = $('#btn-gen-this');
+      if (b) {
+        b.onclick = async () => {
+          b.disabled = true;
+          const r = await api('/api/reports/generate', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ date }),
+          });
+          if (r.ok) {
+            toast('已生成');
+            await renderReport(date);
+          } else {
+            toast(r.message || '失败');
+            b.disabled = false;
+          }
+        };
+      }
+      return;
+    }
+
+    content.innerHTML = `
+      <div class="crumb"><a href="#/reports">日报</a> / ${esc(date)}</div>
+      <div class="actions mb">
+        <button type="button" class="btn" id="btn-regen">重新生成</button>
+        <button type="button" class="btn ghost" id="btn-copy-md">复制 Markdown</button>
+        <a class="btn ghost" href="#/reports">全部日报</a>
+      </div>
+      <article class="panel report-md">${renderMarkdown(data.markdown)}</article>
+      <details class="panel mt fold">
+        <summary>原始 Markdown</summary>
+        <div class="pre mt">${esc(data.markdown)}</div>
+      </details>
+    `;
+    const regen = $('#btn-regen');
+    if (regen) {
+      regen.onclick = async () => {
+        regen.disabled = true;
+        regen.textContent = '生成中…';
+        const r = await api('/api/reports/generate', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ date }),
+        });
+        if (r.ok) {
+          toast('已重新生成');
+          await renderReport(date);
+        } else {
+          toast(r.message || '失败');
+          regen.disabled = false;
+          regen.textContent = '重新生成';
+        }
+      };
+    }
+    const copyMd = $('#btn-copy-md');
+    if (copyMd) copyMd.onclick = () => copyText(data.markdown, 'Markdown 已复制');
   }
 
   async function refreshRuntime() {
@@ -1123,6 +1383,8 @@
     const r = parseRoute();
     try {
       if (r.name === 'finding') await renderFinding(r.fingerprint);
+      else if (r.name === 'reports') await renderReports();
+      else if (r.name === 'report') await renderReport(r.date);
       else if (r.name === 'apps') await renderApps();
       else if (r.name === 'app') {
         const tab = r.tab === 'flow' || r.tab === 'failures' ? r.tab : 'overview';

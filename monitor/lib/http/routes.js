@@ -210,6 +210,39 @@ async function handleRequest(req, res, ctx) {
         return true;
       }
 
+      // 日报
+      if (method === 'GET' && pathname === '/api/reports') {
+        const result = workbench.listReports(cfg, {
+          limit: parseInt(url.searchParams.get('limit') || '60', 10),
+        });
+        sendJson(res, 200, result);
+        return true;
+      }
+
+      if (method === 'POST' && pathname === '/api/reports/generate') {
+        let body = {};
+        try {
+          const raw = await readBody(req);
+          if (raw) body = JSON.parse(raw);
+        } catch {
+          body = {};
+        }
+        const result = workbench.generateReport(cfg, {
+          date: body.date || url.searchParams.get('date') || undefined,
+          scope: body.scope || url.searchParams.get('scope') || undefined,
+        });
+        sendJson(res, result.ok ? 200 : 400, result);
+        return true;
+      }
+
+      const reportGet = pathname.match(/^\/api\/reports\/(\d{4}-\d{2}-\d{2})\/?$/);
+      if (method === 'GET' && reportGet) {
+        const date = reportGet[1];
+        const result = workbench.getReport(cfg, date);
+        sendJson(res, result.ok ? 200 : 404, result);
+        return true;
+      }
+
       const appDetail = pathname.match(/^\/api\/apps\/([^/]+)\/?$/);
       if (method === 'GET' && appDetail) {
         const robotUuid = decodeURIComponent(appDetail[1]);

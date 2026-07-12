@@ -12,6 +12,7 @@ const patchLib = require('./patch');
 const kb = require('./kb');
 const { classifyFix, canPreviewFix, describeFixGuidance } = require('./triage');
 const { runSkill } = require('./agent-runner');
+const { buildDailyReport, toDateKey } = require('./report');
 
 /** @type {{ at: number, apps: object, queueStats: Map } | null} */
 let memCache = null;
@@ -492,6 +493,101 @@ function summarizeSkillResult(result) {
   return out;
 }
 
+function isSafeReportDate(dateKey) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(String(dateKey || ''));
+}
+
+/**
+ * 列出 data/reports 下的日报
+ */
+function listReports(cfg, opts = {}) {
+  const dir = memory.paths(cfg.dataDir).reportsDir;
+  if (!fs.existsSync(dir)) {
+    return { ok: true, count: 0, reports: [], reportsDir: dir };
+  }
+  const limit = opts.limit || 60;
+  const reports = fs
+    .readdirSync(dir)
+    .filter((f) => /^\d{4}-\d{2}-\d{2}\.md$/.test(f))
+    .map((f) => {
+      const date = f.replace(/\.md$/, '');
+      const full = path.join(dir, f);
+      let size = 0;
+      let mtime = null;
+      try {
+        const st = fs.statSync(full);
+        size = st.size;
+        mtime = st.mtime.toISOString();
+      } catch {
+        // ignore
+      }
+      return { date, file: f, size, mtime };
+    })
+    .sort((a, b) => String(b.date).localeCompare(String(a.date)))
+    .slice(0, limit);
+
+  return { ok: true, count: reports.length, reports, reportsDir: dir };
+}
+
+/**
+ * 读取单日日报 Markdown
+ */
+function getReport(cfg, dateKey) {
+  const date = dateKey || toDateKey();
+  if (!isSafeReportDate(date)) {
+    return { ok: false, code: 'bad_date', message: '日期格式须为 YYYY-MM-DD' };
+  }
+  const filePath = path.join(memory.paths(cfg.dataDir).reportsDir, `${date}.md`);
+  if (!fs.existsSync(filePath)) {
+    return {
+      ok: false,
+      code: 'not_found',
+      message: `无日报 ${date}.md，可先生成`,
+      date,
+    };
+  }
+  let markdown = '';
+  try {
+    markdown = fs.readFileSync(filePath, 'utf8');
+  } catch (e) {
+    return { ok: false, code: 'read_failed', message: e.message, date };
+  }
+  return {
+    ok: true,
+    date,
+    filePath,
+    markdown,
+    mtime: fs.statSync(filePath).mtime.toISOString(),
+  };
+}
+
+/**
+ * 生成日报（写盘），供 Web 按钮触发
+ */
+function generateReport(cfg, opts = {}) {
+  const date = opts.date || toDateKey();
+  if (!isSafeReportDate(date)) {
+    return { ok: false, code: 'bad_date', message: '日期格式须为 YYYY-MM-DD' };
+  }
+  try {
+    const result = buildDailyReport(cfg, {
+      date,
+      write: true,
+      scope: opts.scope || cfg.reportScope || 'poll_window',
+    });
+    return {
+      ok: true,
+      date: result.date,
+      filePath: result.filePath,
+      stats: result.stats,
+      markdown: result.markdown,
+      scope: result.scope,
+    };
+  } catch (e) {
+    return { ok: false, code: 'generate_failed', message: e.message || String(e) };
+  }
+}
+
 /**
  * @param {string} robotUuid
  * @param {object} cfg
@@ -606,4 +702,7 @@ module.exports = {
   listPatchesForWorkbench,
   getPatchDetail,
   runWorkbenchAction,
+  listReports,
+  getReport,
+  generateReport,
 };

@@ -867,6 +867,86 @@ details.fold[open] > summary::before { content: "▾ "; }
   border-bottom-color: rgba(28, 25, 23, 0.06);
 }
 
+/* 日报 Markdown */
+.report-md {
+  line-height: 1.6;
+  font-size: 14px;
+  color: var(--text);
+}
+.report-md h1 {
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  margin: 0 0 16px;
+}
+.report-md h2 {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  margin: 28px 0 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+.report-md h3 {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 20px 0 10px;
+  color: var(--text);
+  letter-spacing: -0.01em;
+  text-transform: none;
+}
+.report-md p {
+  margin: 0 0 10px;
+  color: var(--text-2);
+}
+.report-md p.md-item {
+  color: var(--text);
+  font-weight: 500;
+  margin-top: 14px;
+}
+.report-md ul, .report-md ol {
+  margin: 0 0 14px;
+  padding-left: 1.35em;
+  color: var(--text-2);
+}
+.report-md li { margin: 4px 0; }
+.report-md blockquote {
+  margin: 0 0 14px;
+  padding: 10px 14px;
+  border-left: 3px solid var(--accent);
+  background: var(--accent-soft);
+  color: var(--text-2);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+.report-md code {
+  font-family: var(--mono);
+  font-size: 12px;
+  background: var(--surface-inset);
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+.report-md pre.md-pre,
+.report-md .md-pre {
+  background: var(--surface-inset);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  overflow: auto;
+  margin: 0 0 14px;
+}
+.report-md pre code {
+  background: none;
+  padding: 0;
+}
+.report-md hr {
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin: 20px 0;
+}
+.report-md strong { color: var(--text); font-weight: 600; }
+
 .tip {
   display: flex;
   gap: var(--space-4);

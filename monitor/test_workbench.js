@@ -150,6 +150,10 @@ const state = { startedAt: Date.now(), lastPollAt: null, lastDiagnoseAt: null, l
   assert.strictEqual(patches.status, 200);
   assert.strictEqual(JSON.parse(patches.body).ok, true);
 
+  const reports = await request(server, 'GET', '/api/reports');
+  assert.strictEqual(reports.status, 200);
+  assert.strictEqual(JSON.parse(reports.body).ok, true);
+
   const missing = await request(server, 'GET', '/api/nope');
   assert.strictEqual(missing.status, 404);
 
