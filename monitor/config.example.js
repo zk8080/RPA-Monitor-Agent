@@ -16,7 +16,10 @@ module.exports = {
   robotClientUuid: '',
   size: 50,
 
-  // ===== rpa-skill 路径（诊断 Agent tool 用）=====
+  // ===== rpa-skill 路径（诊断 / 工作台流程图，本机只读 require）=====
+  // 方案 A：与 Monitor 同机安装一份 skill（推荐同级目录 D:/RPA-Skill）
+  //   powershell -File scripts/bootstrap-rpa-skill.ps1 -Repo <git地址> -WriteConfig
+  // 也可用环境变量 RPA_SKILL_PATH 覆盖。不要填 http URL（当前不支持远程 skill 服务）。
   rpaSkillPath: 'D:/RPA-Skill',
 
   // ===== 影刀本机流程目录（自动发现 xbot_robot，一般无需 app-map）=====

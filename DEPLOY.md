@@ -29,6 +29,9 @@ report.js 手动           进程内自动 poll + diagnose + report
 copy monitor\config.example.js monitor\config.local.js
 # 编辑密钥：accessKeyId / accessKeySecret；建议 healthPort: 8787
 
+# 本机安装 / 更新 rpa-skill（流程图 + 结构诊断；见下文「方案 A」）
+powershell -File scripts\bootstrap-rpa-skill.ps1 -Repo <rpa-skill-git-url> -WriteConfig
+
 # 单轮验收（跑完退出）
 npm run once
 
@@ -91,6 +94,61 @@ pm2 logs rpa-monitor-agent
 
 ---
 
+## 配套依赖：rpa-skill（方案 A · 本机安装）
+
+工作台「业务流程 / 重新解析」与 diagnose 的结构理解依赖 **本机 rpa-skill**（`require` 只读，**不是**远程 HTTP）。
+
+每台部署机各自装一份 skill，用 git 同步版本。推荐目录布局：
+
+```text
+D:\RPA-Monitor-Agent     ← 本仓库
+D:\RPA-Skill             ← rpa-skill（与 Monitor 同级，只读）
+```
+
+### 一键脚本（Windows）
+
+```powershell
+# 仓库根目录。首次需要 skill 的 git 地址（或设 $env:RPA_SKILL_REPO）
+powershell -File scripts\bootstrap-rpa-skill.ps1 `
+  -Repo git@github.com:YOUR_ORG/RPA-Skill.git `
+  -WriteConfig
+
+# 已有 D:\RPA-Skill 时：pull + 写 config
+powershell -File scripts\bootstrap-rpa-skill.ps1 -WriteConfig
+```
+
+| 参数 | 说明 |
+|------|------|
+| `-Path` | 安装目录，默认「Monitor 父目录/RPA-Skill」 |
+| `-Repo` | git 远程；也可环境变量 `RPA_SKILL_REPO` |
+| `-Branch` | 默认 `main` |
+| `-WriteConfig` | 更新 `monitor/config.local.js` 的 `rpaSkillPath` |
+
+也可用环境变量覆盖路径（优先级高于 config）：
+
+```powershell
+$env:RPA_SKILL_PATH = "D:\RPA-Skill"
+```
+
+### 校验
+
+```powershell
+node -e "const c=require('./monitor/lib/config').loadConfig(); console.log(c.rpaSkillPath)"
+# 应打印本机 skill 绝对路径；目录下需有 scripts/understand.js
+```
+
+### 多机同步
+
+| 做法 | 说明 |
+|------|------|
+| 每台跑 bootstrap 或 `git pull` | **推荐** |
+| 钉 tag / release | 生产机 checkout 固定 tag，避免漂 |
+| 不支持 | 把 `rpaSkillPath` 写成 `https://…`（当前实现是本地 require） |
+
+无 skill 时：poll / 规则 diagnose / 日报仍可跑；**流程图与结构 understand 不可用**。
+
+---
+
 ## 配置（服务器必看）
 
 `monitor/config.local.js`（**勿提交 git**）或环境变量：
@@ -102,7 +160,7 @@ pm2 logs rpa-monitor-agent
 | `pollIntervalMinutes` | 轮询间隔 | 15 |
 | `diagnoseCron` / `reportCron` | 额外诊断/日报（分 时） | `0 9 * * *` / `5 9 * * *` |
 | `healthPort` | HTTP 健康检查 | **8787**（0=关闭） |
-| `rpaSkillPath` | rpa-skill 路径 | 服务器上要存在 |
+| `rpaSkillPath` | rpa-skill **本机**路径 | 见上文方案 A；也可用 `RPA_SKILL_PATH` |
 | `llmBaseUrl` / `llmApiKey` / `llmModel` | 通用 LLM（OpenAI 兼容） | 可选；无 apiKey 则纯规则 |
 | `llmApiStyle` | `openai`（默认）或 `anthropic` | 三方中转一般用 openai |
 | `llmTimeoutMs` | LLM 超时 ms | 默认 **600000**（10 分钟） |
@@ -183,7 +241,8 @@ curl -s http://127.0.0.1:8787/health
 1. `config.local.js` / 密钥 **不要进 git、不要打进公开镜像层**  
 2. `healthPort` 默认只绑本机逻辑使用；若对公网暴露须加防火墙/反向代理鉴权（当前 `/health` **无鉴权**）  
 3. `data/` 含失败日志摘要，按公司规范做盘权限  
-4. rpa-skill 路径只读；流程目录优先本机 ShadowBot 自动发现，app-map 仅覆盖  
+4. rpa-skill **本机只读**（方案 A：每机一份 + bootstrap 脚本）；流程目录优先本机 ShadowBot 自动发现，app-map 仅覆盖  
+
 
 
 ---

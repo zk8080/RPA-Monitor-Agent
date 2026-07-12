@@ -44,7 +44,19 @@ maintain skill（同一 agent.js / runner，按需触发）
 ```bash
 cp monitor/config.example.js monitor/config.local.js
 # 填影刀密钥；可选 llm*、maintain.autoFix
+# 配置 rpaSkillPath 指向本机 rpa-skill（只读）
+```
 
+**Windows · 本机安装 rpa-skill（方案 A）**
+
+```powershell
+# 与 Monitor 同级目录安装 skill，并写入 config.local.js
+powershell -File scripts\bootstrap-rpa-skill.ps1 -Repo <rpa-skill-git-url> -WriteConfig
+```
+
+详见 [DEPLOY.md](DEPLOY.md)「配套依赖：rpa-skill」。
+
+```bash
 npm run verify
 npm run once
 node monitor/service.js --once --llm

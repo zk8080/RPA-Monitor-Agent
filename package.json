@@ -8,6 +8,7 @@
   },
   "scripts": {
     "start": "node monitor/service.js",
+    "bootstrap:skill": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/bootstrap-rpa-skill.ps1 -WriteConfig",
     "once": "node monitor/service.js --once",
     "poll": "node monitor/poll.js --once",
     "diagnose": "node monitor/agent.js diagnose --queue --limit 10 --no-llm",
