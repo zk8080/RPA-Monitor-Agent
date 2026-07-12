@@ -142,9 +142,31 @@ async function pollOnce(cfg, options = {}) {
       }
 
       const existed = memory.loadQueueItem(dataDir, fp.fingerprint);
+      const prevJobs = existed?.sampleJobUuids ? [...existed.sampleJobUuids] : [];
       const item = memory.upsertQueueItem(dataDir, fp, { jobUuid: job.jobUuid });
       if (existed) stats.updated += 1;
       else stats.enqueued += 1;
+
+      // S18：仅当出现新的失败 jobUuid 且该指纹有待验证 patch → regressed
+      const isNewJob = Boolean(job.jobUuid && !prevJobs.includes(job.jobUuid));
+      if (isNewJob) {
+        try {
+          // eslint-disable-next-line global-require
+          const verify = require('./verify');
+          const reg = verify.afterQueueUpsert(dataDir, fp.fingerprint, {
+            jobUuid: job.jobUuid,
+            isNewJob: true,
+          });
+          if (reg && reg.regressed && reg.regressed.length) {
+            stats.regressed = (stats.regressed || 0) + reg.regressed.length;
+            reg.regressed.forEach((r) => {
+              console.error(`⚠️ 修复复发: ${r.message}`);
+            });
+          }
+        } catch {
+          // ignore verify errors
+        }
+      }
 
       if (fp.fingerprint && !seenFp.has(fp.fingerprint)) {
         seenFp.add(fp.fingerprint);
@@ -204,10 +226,28 @@ async function pollOnce(cfg, options = {}) {
     lastPollFindings: findings,
   });
 
+  // S18：静默期达标 → verified
+  let verifyTick = null;
+  try {
+    // eslint-disable-next-line global-require
+    const verify = require('./verify');
+    const vcfg = verify.getVerifyConfig(cfg);
+    verifyTick = verify.tickVerification(dataDir, { quietDays: vcfg.quietDays, now });
+    if (verifyTick.verified && verifyTick.verified.length) {
+      stats.verified = verifyTick.verified.length;
+      verifyTick.verified.forEach((v) => {
+        console.log(`✅ 修复已验证: patch=${v.patchId} fp=${v.fingerprint || ''}`);
+      });
+    }
+  } catch {
+    // ignore
+  }
+
   return {
     stats: { ...stats, findings: findings.length },
     samples,
     findings,
+    verify: verifyTick,
     cursor: {
       lastNextId,
       lastPollAt: now,

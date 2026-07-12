@@ -70,8 +70,8 @@ D:\RPA-Monitor-Agent  消费：监听 OpenAPI + 诊断 Agent + 日报 / KB
 - ✅ S11–S16 maintain（巡检 + py 受控修；默认不 apply）  
 - ✅ **S25 本机工作台 Web MVP**（`http://127.0.0.1:8787/`）  
 - ✅ **S17 诊后 dry-run 存 patch**（`maintain.autoPlanOnDiagnose`，默认关；绝不 apply）  
+- ✅ **S18 修复验证闭环**（apply → pending_verify；新 job 同指纹 → regressed；静默期满 → verified）  
 - ➡ **继续实现 backlog：** [TECH-DESIGN.md §十五](TECH-DESIGN.md)  
-  - **P0：** S18 修复验证闭环  
   - **P1：** S25b 工作台操作面；S19 / S20 / S10a  
   - **P2：** 跨应用 / fixOwner / 服务器源码策略 / develop 骨架  
   - **P3：** tool-loop / 对话入口（可选）  

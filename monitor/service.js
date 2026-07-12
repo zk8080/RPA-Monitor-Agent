@@ -72,7 +72,9 @@ async function runPipeline(cfg, opts, label = 'cycle') {
   const pollResult = await pollOnce(cfg, { maxPages: 3, enrichLogs: true });
   log(
     `  poll done scanned=${pollResult.stats.scanned} failed=${pollResult.stats.failed} ` +
-      `new=${pollResult.stats.enqueued} updated=${pollResult.stats.updated}`,
+      `new=${pollResult.stats.enqueued} updated=${pollResult.stats.updated}` +
+      (pollResult.stats.regressed ? ` regressed=${pollResult.stats.regressed}` : '') +
+      (pollResult.stats.verified ? ` verified=${pollResult.stats.verified}` : ''),
   );
 
   let diagnoseResult = null;

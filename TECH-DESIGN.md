@@ -737,7 +737,7 @@ Poll：`POLL_LOOKBACK_HOURS` / `POLL_MAX_PAGES`。
 |--------|------|------|--------|----------|
 | **P0** | **S25** ✅ | **本机开发者工作台 Web MVP** | 同进程 HTTP：总览 + 应用列表 + understand + 打开文件夹 | 浏览器走通主路径；只绑 127.0.0.1；业务走 lib/tools |
 | **P0** | **S17** ✅ | 诊后自动 **dry-run 存 patch** | `maintain.autoPlanOnDiagnose`：fixability=auto 时 maintain fix dry-run | 开启后诊断结果含 autoPlan.patchId；xbot **未改** |
-| **P0** | **S18** | 修复验证闭环 | 同 fingerprint 是否复发；KB `fixed` / `regressed` | 修后 N 次 poll 无同指纹 → verified；复发提示 rollback |
+| **P0** | **S18** ✅ | 修复验证闭环 | apply→`fixed_pending_verify`；新 job 同指纹→`regressed`；静默 quietDays→`verified` | poll 日志 / patch meta / KB status |
 | **P1** | **S19** | 更多 py fixer + LLM plan | 空路径等模板；复杂函数 LLM 出 diff 仍经 py_compile | 夹具 + 1～2 真实样例 dry-run |
 | **P1** | **S20** | maintain 进入日报 | report 附「可自动修候选 / 未处理 patch」 | 日报一节可读 |
 | **P1** | **S10a** | KB-first 短路 | 仅 `confirmed` 高置信跳过完整 diagnose | 开关；未确认永不短路 |
@@ -771,11 +771,12 @@ maintain: {
 }
 ```
 
-**S18 验证闭环（待做）**
+**S18 验证闭环（已实现）**
 
-- apply 后记 `patchId`、`status=fixed_pending_verify`  
-- 后续 poll 同 fingerprint 再出现 → `regressed` + 建议 rollback  
-- 连续 N 天未再出现 → `verified`  
+- apply 成功 → `lib/verify.markPatchPendingVerify`：`status=fixed_pending_verify`  
+- poll 入队时若 **新 jobUuid** 且同 fingerprint 有 pending/applied patch → `regressed` + 日志建议 rollback  
+- 每轮 poll 末 `tickVerification`：静默 `maintain.verify.quietDays`（默认 3）天 → `verified`  
+- 配置：`maintain.verify.quietDays` 或 `MAINTAIN_VERIFY_QUIET_DAYS`  
 
 ### 15.3 明确不做（除非单独立项）
 

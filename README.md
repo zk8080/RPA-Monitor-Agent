@@ -94,7 +94,8 @@ npm start
 | S11–S16 maintain 巡检 + py 受控修 | ✅ |
 | **S25** 本机开发者工作台 Web MVP | ✅ |
 | **S17** 诊后 dry-run 存 patch | ✅（`maintain.autoPlanOnDiagnose`，默认关） |
-| S10 / S18+ 后续 | 见下表 |
+| **S18** 修复验证闭环 | ✅（pending_verify / regressed / verified） |
+| S10 / S19+ 后续 | 见下表 |
 | service 自动 apply | **永不默认** |
 
 ## 继续实现方向（backlog）
@@ -105,7 +106,7 @@ npm start
 |--------|------|------|
 | **P0** | **S25** ✅ | 本机工作台 Web MVP |
 | **P0** | **S17** ✅ | 诊后自动 **dry-run 存 patch**（`autoPlanOnDiagnose`） |
-| **P0** | **S18** | 修复验证闭环（复发 / verified） |
+| **P0** | **S18** ✅ | 修复验证闭环（复发 / verified） |
 | **P1** | **S19** | 更多 py fixer + LLM plan |
 | **P1** | **S20** | maintain 候选进日报 |
 | **P1** | **S10a** | KB-first（仅 confirmed） |

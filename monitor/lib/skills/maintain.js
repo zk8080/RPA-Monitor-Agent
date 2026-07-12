@@ -11,6 +11,7 @@ const { loadConfig } = require('../config');
 const { matchFixers } = require('../fixers');
 const patchLib = require('../patch');
 const { classifyFix } = require('../triage');
+const verify = require('../verify');
 
 function getAutoFixConfig(cfg) {
   const m = cfg.maintain || {};
@@ -406,6 +407,17 @@ async function runFix(input, cfg) {
         }
       }
     }
+
+    // S18：apply 成功 → fixed_pending_verify
+    const vcfg = verify.getVerifyConfig(cfg);
+    const pending = verify.markPatchPendingVerify(cfg.dataDir, patchMeta.patchId, {
+      fingerprint: working?.fingerprint || patchMeta.fingerprint,
+      quietDaysRequired: vcfg.quietDays,
+      kbId: working?.kbId || null,
+    });
+    if (pending.ok && pending.meta) {
+      applyResult.meta = pending.meta;
+    }
   }
 
   return {
@@ -423,6 +435,14 @@ async function runFix(input, cfg) {
       risk: plan.risk,
     },
     patch: wantApply && applyResult?.meta ? applyResult.meta : patchMeta,
+    verify:
+      wantApply && applyResult?.ok
+        ? {
+            status: 'fixed_pending_verify',
+            quietDays: verify.getVerifyConfig(cfg).quietDays,
+            message: '已进入验证期：后续 poll 若同指纹新 job 出现 → regressed；静默期满 → verified',
+          }
+        : null,
     diffPath: path.join(cfg.dataDir, 'patches', patchMeta.patchId, 'patch.diff'),
     toolTrace,
   };
@@ -433,6 +453,27 @@ async function runRollback(input, cfg) {
     return { ok: false, code: 'missing_patch_id', message: '需要 --patch <patchId>' };
   }
   const r = patchLib.rollbackPatch(cfg.dataDir, input.patchId);
+  if (r.ok && r.meta && r.meta.fingerprint) {
+    const q = memory.loadQueueItem(cfg.dataDir, r.meta.fingerprint);
+    if (q) {
+      memory.atomicWriteJson(memory.queuePath(cfg.dataDir, r.meta.fingerprint), {
+        ...q,
+        fixStatus: 'rolled_back',
+        lastPatchId: input.patchId,
+        rolledBackAt: r.meta.rolledBackAt || new Date().toISOString(),
+      });
+    }
+    try {
+      const kb = require('../kb');
+      kb.writeKb(cfg.dataDir, {
+        fingerprint: r.meta.fingerprint,
+        status: 'rolled_back',
+        notes: `patch ${input.patchId} rolled back`,
+      });
+    } catch {
+      // ignore
+    }
+  }
   return {
     ok: r.ok,
     skill: 'maintain',
