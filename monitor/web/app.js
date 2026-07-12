@@ -1097,26 +1097,351 @@
   }
 
   async function renderMermaidInto(container, source) {
-    if (!container || !source) return;
+    if (!container || !source) return null;
     if (typeof mermaid === 'undefined') {
       container.innerHTML = `<div class="muted">未加载 Mermaid 库（需要访问 CDN）</div>
         <div class="pre mt">${esc(source)}</div>`;
-      return;
+      return null;
     }
     try {
+      // htmlLabels:false → 原生 SVG 文字，栅格化后不易截断/空白
       mermaid.initialize({
         startOnLoad: false,
         theme: 'neutral',
         securityLevel: 'loose',
-        flowchart: { htmlLabels: true, curve: 'basis' },
+        flowchart: {
+          htmlLabels: false,
+          curve: 'basis',
+          useMaxWidth: false,
+          padding: 16,
+          nodeSpacing: 50,
+          rankSpacing: 50,
+        },
       });
       const id = `mmd-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
       const { svg } = await mermaid.render(id, source);
-      container.innerHTML = svg;
+      const pngUrl = await svgMarkupToPngDataUrl(svg, 2);
+      if (!pngUrl) {
+        // 栅格失败时仍展示 SVG，避免整页空白
+        container.innerHTML = svg;
+        container.dataset.graphPng = '';
+        return null;
+      }
+      container.innerHTML = `<img class="graph-img" src="${pngUrl}" alt="流程图" draggable="false" />`;
+      container.dataset.graphPng = pngUrl;
+      return pngUrl;
     } catch (e) {
       container.innerHTML = `<div class="err">流程图渲染失败：${esc(e.message || e)}</div>
         <div class="pre mt">${esc(source)}</div>`;
+      container.dataset.graphPng = '';
+      return null;
     }
+  }
+
+  /**
+   * Mermaid SVG 字符串 → PNG data URL（高清 2x）
+   * @param {string} svgMarkup
+   * @param {number} [scale]
+   * @returns {Promise<string|null>}
+   */
+  function svgMarkupToPngDataUrl(svgMarkup, scale = 2) {
+    return new Promise((resolve) => {
+      try {
+        let markup = String(svgMarkup || '').trim();
+        if (!markup) {
+          resolve(null);
+          return;
+        }
+        // 保证命名空间，否则 Image 解码可能失败
+        if (!/xmlns\s*=/.test(markup)) {
+          markup = markup.replace(/<svg\b/i, '<svg xmlns="http://www.w3.org/2000/svg"');
+        }
+        if (!/xmlns:xlink/.test(markup) && /xlink:/.test(markup)) {
+          markup = markup.replace(
+            /<svg\b/i,
+            '<svg xmlns:xlink="http://www.w3.org/1999/xlink"',
+          );
+        }
+
+        // 解析宽高
+        let w = 0;
+        let h = 0;
+        const vb = markup.match(/viewBox\s*=\s*["']\s*([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)\s*["']/i);
+        if (vb) {
+          w = parseFloat(vb[3]);
+          h = parseFloat(vb[4]);
+        }
+        if (!(w > 0 && h > 0)) {
+          const wm = markup.match(/\bwidth\s*=\s*["']([\d.]+)(?:px)?["']/i);
+          const hm = markup.match(/\bheight\s*=\s*["']([\d.]+)(?:px)?["']/i);
+          if (wm && hm) {
+            w = parseFloat(wm[1]);
+            h = parseFloat(hm[1]);
+          }
+        }
+        if (!(w > 0 && h > 0)) {
+          w = 1200;
+          h = 800;
+        }
+        // 写死像素宽高，避免 100% 导致 canvas 尺寸为 0
+        markup = markup
+          .replace(/\swidth\s*=\s*["'][^"']*["']/i, '')
+          .replace(/\sheight\s*=\s*["'][^"']*["']/i, '')
+          .replace(
+            /<svg\b/i,
+            `<svg width="${w}" height="${h}"`,
+          );
+
+        const blob = new Blob([markup], { type: 'image/svg+xml;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const img = new Image();
+        img.onload = () => {
+          try {
+            const cw = Math.max(1, Math.ceil(w * scale));
+            const ch = Math.max(1, Math.ceil(h * scale));
+            // 过大保护（约 32MP）
+            const maxPx = 16000000;
+            let s = scale;
+            if (cw * ch > maxPx) {
+              s = Math.sqrt(maxPx / (w * h));
+            }
+            const canvas = document.createElement('canvas');
+            canvas.width = Math.max(1, Math.ceil(w * s));
+            canvas.height = Math.max(1, Math.ceil(h * s));
+            const ctx = canvas.getContext('2d');
+            if (!ctx) {
+              URL.revokeObjectURL(url);
+              resolve(null);
+              return;
+            }
+            ctx.fillStyle = '#faf9f7';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.setTransform(s, 0, 0, s, 0, 0);
+            ctx.drawImage(img, 0, 0, w, h);
+            const dataUrl = canvas.toDataURL('image/png');
+            URL.revokeObjectURL(url);
+            resolve(dataUrl);
+          } catch {
+            URL.revokeObjectURL(url);
+            resolve(null);
+          }
+        };
+        img.onerror = () => {
+          URL.revokeObjectURL(url);
+          resolve(null);
+        };
+        img.src = url;
+      } catch {
+        resolve(null);
+      }
+    });
+  }
+
+  /**
+   * 全屏查看 PNG + 放大缩小（只缩放图片像素，不重排节点）
+   * @param {string|null} pngUrl
+   * @param {string} [title]
+   */
+  function openGraphFullscreen(pngUrl, title = '流程图') {
+    closeGraphFullscreen();
+    if (!pngUrl) {
+      toast('流程图图片尚未生成');
+      return;
+    }
+
+    const overlay = document.createElement('div');
+    overlay.id = 'graph-fs';
+    overlay.className = 'graph-fs';
+    overlay.setAttribute('role', 'dialog');
+    overlay.setAttribute('aria-modal', 'true');
+    overlay.setAttribute('aria-label', title);
+    overlay.innerHTML = `
+      <div class="graph-fs-panel">
+        <div class="graph-fs-bar">
+          <div class="graph-fs-title">${esc(title)}</div>
+          <div class="actions graph-fs-tools">
+            <button type="button" class="btn sm" data-fs-zoom="out" title="缩小">−</button>
+            <span class="graph-fs-zoom-label" data-fs-zoom-label>100%</span>
+            <button type="button" class="btn sm" data-fs-zoom="in" title="放大">+</button>
+            <button type="button" class="btn sm ghost" data-fs-zoom="fit" title="适应窗口">适应</button>
+            <button type="button" class="btn sm ghost" data-fs-zoom="reset" title="原始大小">1:1</button>
+            <a class="btn sm ghost" href="${pngUrl}" download="flowchart.png">下载</a>
+            <button type="button" class="btn sm" data-graph-fs-close>关闭</button>
+          </div>
+        </div>
+        <div class="graph-fs-body" data-fs-body>
+          <div class="graph-fs-host" id="graph-fs-host">
+            <img class="graph-fs-img" data-fs-img src="${pngUrl}" alt="${esc(title)}" draggable="false" />
+          </div>
+        </div>
+        <p class="graph-fs-hint">+/− 或 Ctrl+滚轮缩放 · 拖动画布平移 · Esc 关闭</p>
+      </div>`;
+    document.body.appendChild(overlay);
+    document.body.classList.add('graph-fs-open');
+
+    const body = overlay.querySelector('[data-fs-body]');
+    const img = overlay.querySelector('[data-fs-img]');
+    const label = overlay.querySelector('[data-fs-zoom-label]');
+    let scale = 1;
+    let natW = 0;
+    let natH = 0;
+    const MIN = 0.25;
+    const MAX = 6;
+    const STEP = 0.25;
+
+    function applyScale() {
+      if (!natW || !natH) return;
+      const w = Math.max(1, Math.round(natW * scale));
+      const h = Math.max(1, Math.round(natH * scale));
+      img.style.width = `${w}px`;
+      img.style.height = `${h}px`;
+      if (label) label.textContent = `${Math.round(scale * 100)}%`;
+    }
+
+    function zoomTo(next, anchorX, anchorY) {
+      const prev = scale;
+      scale = Math.min(MAX, Math.max(MIN, +next.toFixed(3)));
+      if (scale === prev || !body) {
+        applyScale();
+        return;
+      }
+      // 以视口中心或指针为锚，缩放后尽量保持该点不动
+      const rect = body.getBoundingClientRect();
+      const px = anchorX != null ? anchorX - rect.left : rect.width / 2;
+      const py = anchorY != null ? anchorY - rect.top : rect.height / 2;
+      const contentX = (body.scrollLeft + px) / prev;
+      const contentY = (body.scrollTop + py) / prev;
+      applyScale();
+      body.scrollLeft = contentX * scale - px;
+      body.scrollTop = contentY * scale - py;
+    }
+
+    function zoomBy(delta, ax, ay) {
+      zoomTo(scale + delta, ax, ay);
+    }
+
+    function fit() {
+      if (!natW || !body) return;
+      const pad = 32;
+      const availW = Math.max(body.clientWidth - pad, 80);
+      const availH = Math.max(body.clientHeight - pad, 80);
+      const s = Math.min(availW / natW, availH / natH, 1);
+      scale = Math.min(MAX, Math.max(MIN, s));
+      applyScale();
+      // 居中
+      body.scrollLeft = Math.max(0, (natW * scale - body.clientWidth) / 2);
+      body.scrollTop = Math.max(0, (natH * scale - body.clientHeight) / 2);
+    }
+
+    function reset() {
+      scale = 1;
+      applyScale();
+      if (body) {
+        body.scrollLeft = 0;
+        body.scrollTop = 0;
+      }
+    }
+
+    function onReady() {
+      natW = img.naturalWidth || img.width || 800;
+      natH = img.naturalHeight || img.height || 600;
+      // 默认 1:1，方便直接看清节点文字
+      reset();
+    }
+
+    if (img.complete && img.naturalWidth) onReady();
+    else img.onload = onReady;
+
+    overlay.querySelectorAll('[data-fs-zoom]').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const act = btn.getAttribute('data-fs-zoom');
+        if (act === 'in') zoomBy(STEP);
+        else if (act === 'out') zoomBy(-STEP);
+        else if (act === 'fit') fit();
+        else if (act === 'reset') reset();
+      });
+    });
+
+    // Ctrl/⌘ + 滚轮缩放
+    body.addEventListener(
+      'wheel',
+      (e) => {
+        if (e.ctrlKey || e.metaKey) {
+          e.preventDefault();
+          zoomBy(e.deltaY > 0 ? -STEP : STEP, e.clientX, e.clientY);
+        }
+      },
+      { passive: false },
+    );
+
+    // 拖拽平移（按住空白/图片拖动滚动）
+    let dragging = false;
+    let lastX = 0;
+    let lastY = 0;
+    body.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return;
+      if (e.target.closest('button, a')) return;
+      dragging = true;
+      lastX = e.clientX;
+      lastY = e.clientY;
+      body.classList.add('is-panning');
+      try {
+        body.setPointerCapture(e.pointerId);
+      } catch {
+        // ignore
+      }
+    });
+    body.addEventListener('pointermove', (e) => {
+      if (!dragging) return;
+      body.scrollLeft -= e.clientX - lastX;
+      body.scrollTop -= e.clientY - lastY;
+      lastX = e.clientX;
+      lastY = e.clientY;
+    });
+    const endPan = (e) => {
+      if (!dragging) return;
+      dragging = false;
+      body.classList.remove('is-panning');
+      try {
+        body.releasePointerCapture(e.pointerId);
+      } catch {
+        // ignore
+      }
+    };
+    body.addEventListener('pointerup', endPan);
+    body.addEventListener('pointercancel', endPan);
+
+    const close = () => closeGraphFullscreen();
+    overlay.querySelector('[data-graph-fs-close]').onclick = close;
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) close();
+    });
+    overlay._onKey = (e) => {
+      if (e.key === 'Escape') close();
+      if (e.key === '+' || e.key === '=') {
+        e.preventDefault();
+        zoomBy(STEP);
+      }
+      if (e.key === '-' || e.key === '_') {
+        e.preventDefault();
+        zoomBy(-STEP);
+      }
+      if (e.key === '0') {
+        e.preventDefault();
+        fit();
+      }
+    };
+    window.addEventListener('keydown', overlay._onKey);
+  }
+
+  function closeGraphFullscreen() {
+    const overlay = document.getElementById('graph-fs');
+    if (!overlay) return;
+    if (overlay._onKey) window.removeEventListener('keydown', overlay._onKey);
+    overlay.remove();
+    document.body.classList.remove('graph-fs-open');
   }
 
   function listBlock(title, items, mapper) {
@@ -1735,14 +2060,22 @@
             )}</p>
           </div>
           <div class="actions">
+            ${
+              mermaidSrc
+                ? `<button type="button" class="btn sm primary" id="btn-graph-fs">全屏查看</button>`
+                : ''
+            }
             <button type="button" class="btn sm ghost" data-refresh-flow>重新解析</button>
           </div>
         </div>
         ${r.summary ? `<p class="summary-line">${esc(r.summary)}</p>` : ''}
         ${
           mermaidSrc
-            ? `<div class="graph graph-hero"><div class="graph-host" id="mermaid-host"><div class="muted">渲染中…</div></div></div>
-               <details class="raw"><summary>Mermaid 源码</summary><div class="pre mt">${esc(mermaidSrc)}</div></details>`
+            ? `<div class="graph graph-hero">
+                <div class="graph-host" id="mermaid-host"><div class="muted">渲染中…</div></div>
+              </div>
+              <p class="hint">流程图已渲染为 PNG。节点文字完整显示；点「全屏查看」或点击图片滚动浏览。</p>
+              <details class="raw"><summary>Mermaid 源码</summary><div class="pre mt">${esc(mermaidSrc)}</div></details>`
             : empty('没有流程图', '可点「重新解析」。')
         }
       </div>
@@ -1819,7 +2152,22 @@
 
     const refreshBtn = tabBody.querySelector('[data-refresh-flow]');
     if (refreshBtn) refreshBtn.onclick = () => renderAppFlow(robotUuid, detail, true);
-    if (mermaidSrc) await renderMermaidInto($('#mermaid-host'), mermaidSrc);
+    if (mermaidSrc) {
+      const preview = $('#mermaid-host');
+      const pngUrl = await renderMermaidInto(preview, mermaidSrc);
+      const title = r.projectName || detail.name || '流程图';
+      const openFs = () => {
+        const url = (preview && preview.dataset.graphPng) || pngUrl;
+        openGraphFullscreen(url, title);
+      };
+      const fsBtn = $('#btn-graph-fs');
+      if (fsBtn) fsBtn.onclick = openFs;
+      if (preview) {
+        preview.style.cursor = 'zoom-in';
+        preview.title = '点击全屏查看 PNG';
+        preview.addEventListener('click', openFs);
+      }
+    }
   }
 
   async function route() {
