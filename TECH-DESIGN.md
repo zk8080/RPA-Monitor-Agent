@@ -743,9 +743,9 @@ Poll：`POLL_LOOKBACK_HOURS` / `POLL_MAX_PAGES`。
 | **P1** | **S10a** ✅ | KB-first 短路 | `diagnose.kbFirst`；仅 confirmed+同 fp+高置信 | 开关默认关；pending 永不短路 |
 | **P1** | **S25b** ✅ | 工作台操作面 | 一键 diagnose / maintain dry-run；`/api/findings`；问题详情页 | 经 `runSkill`；Web **永不 apply** |
 | **P2** | **S10b** ✅ | 跨应用归并 | `errorSignature` + `affectedApps`（queue 主键仍 fingerprint） | 日报/总览「跨应用根因」；KB 写入 affectedApps |
-| **P2** | **S10c** | 分诊标签 | `fixOwner`: business / developer / known | 进 diagnosis + 报告 |
-| **P2** | **S21** | 服务器流程源码策略 | 无 ShadowBot：共享盘 / app-map / 降级 | DEPLOY 专节 + 配置 |
-| **P2** | **S22** | develop skill 骨架 | `agent.js develop` 路由细化 | 入口存在、不破坏现网 |
+| **P2** | **S10c** ⏸ | 分诊标签 `fixOwner` | business / developer / known | **暂缓**：业务侧尚无明确归属划分；规则易误导，待组织分工清晰后再做 |
+| **P2** | **S21** | 服务器流程源码策略 | 无 ShadowBot：共享盘 / app-map / 降级 | DEPLOY 专节 + 配置（当前无服务器需求可后置） |
+| **P2** | **S22** ⏸ | develop skill 骨架 | `agent.js develop` 路由 + playbook 占位 | **暂缓**：当前收益低于「工作台 → 复制路径 → Coding Agent」；真要生成流程再立项 |
 | **P3** | **S23** | maintain tool-loop（可选） | 模型多步读 py/日志，写盘仍白名单 | opt-in；默认 playbook |
 | **P3** | **S24** | 对话式入口（可选） | 「修这个 fingerprint」→ 同一 runner | 不替代 CLI/service |
 

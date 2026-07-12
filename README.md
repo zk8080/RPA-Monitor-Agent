@@ -115,9 +115,9 @@ npm start
 | **P1** | **S10a** ✅ | KB-first（仅 confirmed） |
 | **P1** | **S25b** ✅ | 工作台操作面 |
 | **P2** | **S10b** ✅ | 跨应用归并（errorSignature） |
-| **P2** | **S10c** | fixOwner 分诊 |
-| **P2** | **S21** | 服务器无 ShadowBot 时的源码策略 |
-| **P2** | **S22** | develop skill 骨架 |
+| **P2** | **S10c** ⏸ | fixOwner 分诊（归属未明确，暂缓） |
+| **P2** | **S21** | 服务器无 ShadowBot 时的源码策略（暂无需求） |
+| **P2** | **S22** ⏸ | develop skill 骨架（不如工作台 → Coding Agent，暂缓） |
 | **P3** | **S23/S24** | maintain tool-loop / 对话入口（可选） |
 
 **明确不做：** service 默认改生产 py；无闸门的 LLM 全量改流程。

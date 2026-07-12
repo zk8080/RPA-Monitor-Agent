@@ -77,7 +77,10 @@ D:\RPA-Monitor-Agent  消费：监听 OpenAPI + 诊断 Agent + 日报 / KB
 - ✅ **S19** 空路径 py fixer（`python_empty_path`）  
 - ✅ **S10b** 跨应用根因归并（errorSignature ≥2 app）  
 - ➡ **继续实现 backlog：** [TECH-DESIGN.md §十五](TECH-DESIGN.md)  
-  - **P2：** S10c fixOwner / S21 服务器源码 / S22 develop 骨架  
+  - **主路径（当前）：** 工作台理解失败/流程 → 复制路径 → **Coding Agent** 改代码（收益最高）  
+  - **P2 后置：** S21 服务器源码（暂无需求）  
+  - **P2 ⏸ S10c** fixOwner：归属划分未明确，暂缓  
+  - **P2 ⏸ S22** develop 骨架：不如直接 Coding Agent，暂缓  
   - **P3：** tool-loop / 对话入口（可选）  
   - **禁止：** service 默认 apply 生产 py；Web 复制平行业务栈  
 
