@@ -106,7 +106,7 @@ const TOOLS = [
   {
     name: 'queue_get',
     description: '读取 data/queue 中的条目（按 fingerprint 或列出未诊断）',
-    skills: ['diagnose'],
+    skills: ['diagnose', 'maintain'],
     inputSchema: {
       type: 'object',
       properties: {

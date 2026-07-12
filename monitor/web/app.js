@@ -232,7 +232,15 @@
         if (location.hash === next) await route();
         else location.hash = next;
       } else {
-        toast(r.message || r.code || '操作失败');
+        // workbench 包装：真实原因在 result.message / result.code
+        const inner = r.result || {};
+        const msg =
+          r.message ||
+          inner.message ||
+          (inner.code ? `${inner.code}` : null) ||
+          r.code ||
+          '操作失败';
+        toast(msg);
       }
     } catch (err) {
       toast(err.message || '请求失败');
