@@ -144,9 +144,19 @@
     const fp = f.fingerprint || '';
     const remark = f.rawRemark || '';
     const diag = f.lastDiagnosis;
+    const canPreview = f.canPreviewFix === true;
+    const fixLabel = f.guidance?.title || f.fixClass || '';
     return `<div class="item-side">
       <div class="badges">
         ${f.diagnosed ? '<span class="badge ok">已诊断</span>' : '<span class="badge warn">未诊断</span>'}
+        ${fixLabel ? `<span class="badge">${esc(fixLabel)}</span>` : ''}
+        ${
+          canPreview
+            ? '<span class="badge ok">可预览修</span>'
+            : f.fixability === 'manual'
+              ? '<span class="badge">需人工</span>'
+              : ''
+        }
         ${f.fixStatus ? `<span class="badge">${esc(f.fixStatus)}</span>` : ''}
         ${f.occurrenceCount ? `<span class="badge">${esc(f.occurrenceCount)} 次</span>` : ''}
       </div>
@@ -155,12 +165,20 @@
           ? `<div class="item-sub wrap" style="max-width:220px;text-align:right">${esc(
               String(diag.rootCause).slice(0, 80),
             )}</div>`
-          : ''
+          : f.guidance && f.guidance.summary
+            ? `<div class="item-sub wrap" style="max-width:220px;text-align:right">${esc(
+                String(f.guidance.summary).slice(0, 80),
+              )}</div>`
+            : ''
       }
       <div class="item-actions">
         <a class="btn sm primary" href="#/findings/${encodeURIComponent(fp)}">详情</a>
         <button type="button" class="btn sm" data-action="diagnose" data-fp="${esc(fp)}">诊断</button>
-        <button type="button" class="btn sm" data-action="fix-dry-run" data-fp="${esc(fp)}">预览修复</button>
+        ${
+          canPreview
+            ? `<button type="button" class="btn sm" data-action="fix-dry-run" data-fp="${esc(fp)}">预览修复</button>`
+            : ''
+        }
         <button type="button" class="btn sm" data-copy="${esc(fp)}" data-copy-msg="指纹已复制">复制指纹</button>
         ${
           remark
@@ -169,6 +187,20 @@
         }
         <a class="btn sm" href="#/apps/${encodeURIComponent(robotUuid)}/flow">流程图</a>
       </div>
+    </div>`;
+  }
+
+  function renderGuidanceBlock(g) {
+    if (!g) return '';
+    const steps = (g.steps || [])
+      .map((s, i) => `<li>${esc(i + 1)}. ${esc(s)}</li>`)
+      .join('');
+    return `<div class="panel guidance-panel">
+      <h2>修复建议 · ${esc(g.title || '')}</h2>
+      <p class="summary-line" style="margin-bottom:12px">${esc(g.summary || '')}</p>
+      ${steps ? `<ul class="plain-list">${steps}</ul>` : ''}
+      <p class="hint mt">${esc(g.cta || '')}
+        ${g.fixClass ? ` · 分诊 ${esc(g.fixClass)}/${esc(g.fixability || '')}` : ''}</p>
     </div>`;
   }
 
@@ -232,15 +264,23 @@
         if (location.hash === next) await route();
         else location.hash = next;
       } else {
-        // workbench 包装：真实原因在 result.message / result.code
+        // workbench 包装：真实原因在 result.message / guidance
         const inner = r.result || {};
+        const g = r.guidance || inner.guidance;
         const msg =
+          (g && g.summary) ||
           r.message ||
           inner.message ||
           (inner.code ? `${inner.code}` : null) ||
           r.code ||
           '操作失败';
         toast(msg);
+        // 不可预览时跳转详情看完整建议
+        if (r.code === 'not_previewable' || inner.code === 'not_previewable' || g) {
+          const next = `#/findings/${encodeURIComponent(fingerprint)}`;
+          if (location.hash === next) await route();
+          else location.hash = next;
+        }
       }
     } catch (err) {
       toast(err.message || '请求失败');
@@ -811,10 +851,18 @@
     const f = data.finding || {};
     const d = data.diagnosis || {};
     const k = data.kb || {};
+    const g = data.guidance || null;
+    const triage = data.triage || {};
+    const canPreview = triage.canPreviewFix === true;
     const patches = data.patches || [];
     const robotUuid = f.robotUuid || '';
 
-    setHeader(f.robotName || fingerprint, `${f.errorType || ''} · ${f.diagnosed ? '已诊断' : '未诊断'}`);
+    setHeader(
+      f.robotName || fingerprint,
+      `${f.errorType || ''} · ${f.diagnosed ? '已诊断' : '未诊断'}${
+        g && g.title ? ` · ${g.title}` : ''
+      }`,
+    );
 
     content.innerHTML = `
       <div class="crumb">
@@ -827,6 +875,12 @@
         <div style="min-width:0;flex:1">
           <div class="badges" style="justify-content:flex-start">
             ${f.diagnosed ? '<span class="badge ok">已诊断</span>' : '<span class="badge warn">未诊断</span>'}
+            ${g && g.title ? `<span class="badge">${esc(g.title)}</span>` : ''}
+            ${
+              canPreview
+                ? '<span class="badge ok">可预览修</span>'
+                : '<span class="badge">需人工</span>'
+            }
             ${f.fixStatus ? `<span class="badge">${esc(f.fixStatus)}</span>` : ''}
             ${f.occurrenceCount ? `<span class="badge">${esc(f.occurrenceCount)} 次</span>` : ''}
           </div>
@@ -835,7 +889,11 @@
         </div>
         <div class="actions">
           <button type="button" class="btn primary" data-action="diagnose" data-fp="${esc(fingerprint)}">诊断</button>
-          <button type="button" class="btn" data-action="fix-dry-run" data-fp="${esc(fingerprint)}">预览修复</button>
+          ${
+            canPreview
+              ? `<button type="button" class="btn" data-action="fix-dry-run" data-fp="${esc(fingerprint)}">预览修复</button>`
+              : ''
+          }
           ${
             robotUuid
               ? `<a class="btn ghost" href="#/apps/${encodeURIComponent(robotUuid)}/flow">流程图</a>`
@@ -844,7 +902,9 @@
         </div>
       </div>
 
-      <div class="grid-2">
+      ${renderGuidanceBlock(g)}
+
+      <div class="grid-2 mt">
         <div class="panel">
           <h2>诊断结论</h2>
           ${
@@ -856,7 +916,7 @@
                   <div class="k">置信度</div><div class="v">${esc(d.confidence != null ? d.confidence : k.confidence ?? '—')}</div>
                   <div class="k">类别</div><div class="v">${esc(d.errorCategory || k.errorCategory || '—')}</div>
                 </div>`
-              : empty('尚未诊断', '点击「诊断」生成结构化结论（规则，默认不调 LLM）。')
+              : empty('尚未诊断', '点击「诊断」生成结构化结论（规则，默认不调 LLM）。也可先看上方修复建议。')
           }
           ${k.id ? `<p class="hint mt">KB：${esc(k.id)} · ${esc(k.status || '')}</p>` : ''}
         </div>
@@ -867,6 +927,7 @@
             <div class="k">UUID</div><div class="v mono">${esc(robotUuid)}</div>
             <div class="k">流程</div><div class="v">${esc(f.flowName || '—')} L${esc(f.lineNumber || '?')}</div>
             <div class="k">错误</div><div class="v">${esc(f.errorType || '—')}</div>
+            <div class="k">分诊</div><div class="v">${esc(triage.fixClass || '—')} / ${esc(triage.fixability || '—')}</div>
             <div class="k">最近</div><div class="v">${esc(relTime(f.lastSeen))}</div>
             <div class="k">补丁</div><div class="v mono">${esc(f.lastPatchId || '—')}</div>
           </div>

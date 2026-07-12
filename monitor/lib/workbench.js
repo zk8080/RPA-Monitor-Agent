@@ -10,6 +10,7 @@ const understandCache = require('./understand-cache');
 const openPath = require('./http/open-path');
 const patchLib = require('./patch');
 const kb = require('./kb');
+const { classifyFix, canPreviewFix, describeFixGuidance } = require('./triage');
 const { runSkill } = require('./agent-runner');
 
 /** @type {{ at: number, apps: object, queueStats: Map } | null} */
@@ -182,21 +183,7 @@ function getAppDetail(robotUuid, cfg, opts = {}) {
     .slice()
     .sort((a, b) => String(b.lastSeen || '').localeCompare(String(a.lastSeen || '')))
     .slice(0, limit)
-    .map((it) => ({
-      fingerprint: it.fingerprint,
-      flowName: it.flowName,
-      errorType: it.errorType,
-      elementName: it.elementName,
-      rawRemark: it.rawRemark,
-      diagnosed: !!it.diagnosed,
-      occurrenceCount: it.occurrenceCount,
-      lastSeen: it.lastSeen,
-      firstSeen: it.firstSeen,
-      kbId: it.kbId || null,
-      fixStatus: it.fixStatus || null,
-      lastPatchId: it.lastPatchId || null,
-      lastDiagnosis: it.lastDiagnosis || null,
-    }));
+    .map((it) => enrichFailureItem(it, cfg));
 
   const patches = patchLib
     .listPatches(cfg.dataDir)
@@ -234,7 +221,46 @@ function getAppDetail(robotUuid, cfg, opts = {}) {
 }
 
 /**
- * 单条失败详情：queue + lastDiagnosis + KB + 相关 patches
+ * 为 queue 条目附加分诊 + 是否可预览修复 + 人工指引
+ */
+function enrichFailureItem(it, cfg) {
+  let appInfo = null;
+  try {
+    if (it.robotUuid) appInfo = rpa.resolveXbotDir(it.robotUuid, { cfg, dataDir: cfg.dataDir });
+  } catch {
+    appInfo = null;
+  }
+  const triage = classifyFix(it, { logs: [], appInfo });
+  const guidance = describeFixGuidance(triage, {
+    errorType: it.errorType,
+    rawRemark: it.rawRemark,
+    suggestion: it.lastDiagnosis && it.lastDiagnosis.suggestion,
+  });
+  return {
+    fingerprint: it.fingerprint,
+    flowName: it.flowName,
+    errorType: it.errorType,
+    elementName: it.elementName,
+    rawRemark: it.rawRemark,
+    diagnosed: !!it.diagnosed,
+    occurrenceCount: it.occurrenceCount,
+    lastSeen: it.lastSeen,
+    firstSeen: it.firstSeen,
+    kbId: it.kbId || null,
+    fixStatus: it.fixStatus || null,
+    lastPatchId: it.lastPatchId || null,
+    lastDiagnosis: it.lastDiagnosis || null,
+    robotUuid: it.robotUuid || null,
+    robotName: it.robotName || null,
+    fixClass: triage.fixClass,
+    fixability: triage.fixability,
+    canPreviewFix: canPreviewFix(triage),
+    guidance,
+  };
+}
+
+/**
+ * 单条失败详情：queue + lastDiagnosis + KB + 相关 patches + 修复指引
  */
 function getFindingDetail(fingerprint, cfg) {
   if (!fingerprint) {
@@ -257,10 +283,18 @@ function getFindingDetail(fingerprint, cfg) {
     .filter((p) => p.fingerprint === fingerprint)
     .slice(0, 10);
 
+  const enriched = enrichFailureItem(item, cfg);
+
   return {
     ok: true,
     finding: item,
     diagnosis: item.lastDiagnosis || null,
+    triage: {
+      fixClass: enriched.fixClass,
+      fixability: enriched.fixability,
+      canPreviewFix: enriched.canPreviewFix,
+    },
+    guidance: enriched.guidance,
     kb: kbEntry
       ? {
           id: kbEntry.id,
@@ -353,25 +387,76 @@ async function runWorkbenchAction(action, input, cfg) {
     }
 
     if (action === 'fix-dry-run' || action === 'fix') {
+      // 先分诊：不可预览时直接返回人工建议，不调用 maintain
+      const detail = getFindingDetail(input.fingerprint, cfg);
+      if (!detail.ok) {
+        return {
+          ok: false,
+          action: 'fix-dry-run',
+          dryRun: true,
+          applied: false,
+          code: detail.code,
+          message: detail.message,
+          guidance: null,
+        };
+      }
+      if (!detail.triage?.canPreviewFix && input.force !== true) {
+        return {
+          ok: false,
+          action: 'fix-dry-run',
+          dryRun: true,
+          applied: false,
+          code: 'not_previewable',
+          message: detail.guidance?.summary || '当前失败不支持自动预览修复',
+          guidance: detail.guidance,
+          triage: detail.triage,
+          result: {
+            ok: false,
+            code: 'not_previewable',
+            message: detail.guidance?.summary || '当前失败不支持自动预览修复',
+            fixClass: detail.triage?.fixClass,
+            fixability: detail.triage?.fixability,
+            guidance: detail.guidance,
+          },
+        };
+      }
+
       // Web 永不 apply
       const result = await runSkill(
         'maintain',
         {
           action: 'fix',
           fingerprint: input.fingerprint,
-          force: input.force === true,
-          // 明确不写盘
+          force: input.force === true || detail.triage?.fixability === 'assisted',
           apply: false,
           forceApply: false,
         },
         { cfg },
       );
       invalidateAppsCache();
+      // 失败时附带 guidance，避免只剩 code
+      if (!result.ok) {
+        return {
+          ok: false,
+          action: 'fix-dry-run',
+          dryRun: true,
+          applied: false,
+          code: result.code,
+          message: result.message,
+          guidance: detail.guidance,
+          triage: detail.triage,
+          result: {
+            ...summarizeSkillResult(result),
+            guidance: detail.guidance,
+          },
+        };
+      }
       return {
-        ok: !!result.ok,
+        ok: true,
         action: 'fix-dry-run',
         dryRun: true,
         applied: false,
+        guidance: detail.guidance,
         result: summarizeSkillResult(result),
       };
     }

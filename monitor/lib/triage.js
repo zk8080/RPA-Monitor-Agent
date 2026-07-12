@@ -62,6 +62,103 @@ function classifyFix(working, ctx = {}) {
   return { fixClass, fixability, fixTargets };
 }
 
+/**
+ * 是否适合 Web「预览修复」（dry-run py patch）
+ * auto 且有 python 目标；assisted 有 python 时也允许预览（需 force）
+ */
+function canPreviewFix(triage) {
+  if (!triage) return false;
+  const hasPy = (triage.fixTargets || []).some((t) => t.type === 'python' && (t.absolutePath || t.relativePath));
+  if (!hasPy) return false;
+  return triage.fixability === 'auto' || triage.fixability === 'assisted';
+}
+
+/**
+ * 给人看的修复指引（不能 auto 时尤其重要）
+ * @param {{ fixClass?: string, fixability?: string, fixTargets?: any[] }} triage
+ * @param {{ errorType?: string, rawRemark?: string, suggestion?: string }} [extra]
+ */
+function describeFixGuidance(triage = {}, extra = {}) {
+  const fixClass = triage.fixClass || 'unknown';
+  const fixability = triage.fixability || 'manual';
+  const hasPy = (triage.fixTargets || []).some((t) => t.type === 'python');
+
+  const byClass = {
+    element: {
+      title: '元素定位问题',
+      summary: '页面元素找不到或不唯一，属于选择器/等待问题，不是 Python 补丁能自动修的。',
+      steps: [
+        '在影刀 Studio 打开失败子流程对应行',
+        '重新抓取元素或收紧选择器（父级/属性）',
+        '为页面加载增加显式等待/存在性判断',
+        '用「诊断」查看根因与流程位置，再用 Coding Agent 改流程',
+      ],
+    },
+    env: {
+      title: '环境 / 超时问题',
+      summary: '超时、断连或机器人占用等，通常需调超时、网络或调度，而非改 py 逻辑。',
+      steps: [
+        '检查目标系统是否缓慢或不可用',
+        '适当增大等待超时，优化等待条件',
+        '确认机器人未被占用、客户端正常',
+        '若反复出现，在诊断结论中记录环境依赖',
+      ],
+    },
+    config: {
+      title: '路径 / 配置问题',
+      summary: '文件路径为空或不存在，可能是配置或上游下载失败。',
+      steps: [
+        '核对配置表/路径拼接是否为空',
+        '确认上游下载/导出步骤是否成功',
+        '运行前增加路径存在性校验',
+      ],
+    },
+    code_boundary: {
+      title: '代码边界问题',
+      summary: hasPy
+        ? '可能可用 Python 补丁预览（如 IndexError 边界检查）。'
+        : '疑似代码问题，但未解析到可写的 .py 文件，暂无法自动生成补丁。',
+      steps: hasPy
+        ? ['可点「预览修复」生成 dry-run patch', '确认 diff 后再用 CLI --apply', 'apply 后由 poll 验证是否复发']
+        : ['先「诊断」并拉取含 Traceback 的日志', '确认 invoke_module / .py 路径', '定位到 py 后再预览修复'],
+    },
+    null_guard: {
+      title: '空值防护问题',
+      summary: hasPy ? '可能对 None 访问加守卫并生成预览补丁。' : '疑似空引用，但未定位到 .py 文件。',
+      steps: hasPy
+        ? ['可点「预览修复」', '检查 diff 后 CLI apply']
+        : ['诊断并补充日志中的 File "*.py" 路径', '再尝试预览修复'],
+    },
+    unknown: {
+      title: '需人工判断',
+      summary: '当前规则无法自动归类为可修代码问题。',
+      steps: [
+        '先点「诊断」生成结构化根因与建议',
+        '打开流程图定位业务步骤',
+        '复制路径后用 Coding Agent 深入排查',
+      ],
+    },
+  };
+
+  const base = byClass[fixClass] || byClass.unknown;
+  const canPreview = canPreviewFix(triage);
+  let cta = '查看详情与诊断建议';
+  if (canPreview) cta = '可尝试「预览修复」（仅 dry-run，不写盘）';
+  else if (fixability === 'manual') cta = '请按下方步骤人工处理，不显示自动预览';
+
+  return {
+    fixClass,
+    fixability,
+    canPreviewFix: canPreview,
+    title: base.title,
+    summary: base.summary,
+    steps: base.steps,
+    cta,
+    suggestion: extra.suggestion || null,
+    errorType: extra.errorType || null,
+  };
+}
+
 function resolveFixTargets(working, ctx, text, fixClass) {
   const targets = [];
   const xbotDir = ctx.appInfo && ctx.appInfo.xbotDir;
@@ -178,4 +275,6 @@ module.exports = {
   classifyFix,
   resolveFixTargets,
   resolvePyPath,
+  canPreviewFix,
+  describeFixGuidance,
 };
