@@ -33,6 +33,8 @@ function getWorkbenchConfig(cfg = {}) {
     agents: w.agents != null ? w.agents : null,
     // S25b：Web 触发 skill（仅 dry-run fix；apply 永不从 Web）
     actionsEnabled: w.actionsEnabled !== false,
+    // S26：Web 配置 LLM
+    settingsEnabled: w.settingsEnabled !== false,
   };
 }
 
@@ -435,11 +437,16 @@ async function runWorkbenchAction(action, input, cfg) {
   actionBusy = true;
   try {
     if (action === 'diagnose') {
+      // useLlm：请求体显式 true/false 优先；否则跟 cfg.diagnoseUseLlm
+      let useLlm;
+      if (input.useLlm === true) useLlm = true;
+      else if (input.useLlm === false) useLlm = false;
+      else useLlm = cfg.diagnoseUseLlm !== false;
       const result = await runSkill(
         'diagnose',
         {
           fingerprint: input.fingerprint,
-          useLlm: input.useLlm === true,
+          useLlm,
           fetchLogs: true,
         },
         { cfg },
@@ -719,6 +726,84 @@ function getAppUnderstand(robotUuid, cfg, opts = {}) {
 }
 
 /**
+ * S26b：业务解读（LLM）。先 understand，再基于结构摘要生成业务向说明。
+ * @param {string} robotUuid
+ * @param {object} cfg
+ * @param {{ force?: boolean, flowName?: string, cacheOnly?: boolean }} [opts]
+ */
+async function getAppBusinessBrief(robotUuid, cfg, opts = {}) {
+  const wb = getWorkbenchConfig(cfg);
+  if (!wb.actionsEnabled) {
+    return { ok: false, code: 'actions_disabled', message: 'workbench.actionsEnabled=false' };
+  }
+  // eslint-disable-next-line global-require
+  const businessBrief = require('./business-brief');
+  // eslint-disable-next-line global-require
+  const { isLlmConfigured } = require('./llm');
+
+  const u = getAppUnderstand(robotUuid, cfg, {
+    flowName: opts.flowName || '',
+    skipCache: false,
+  });
+  const detail = getAppDetail(robotUuid, cfg);
+  const appName =
+    (detail.ok && detail.name) ||
+    (u.ok && u.result && u.result.projectName) ||
+    robotUuid;
+
+  // 只读缓存：刷新页面回显；无缓存不调 LLM
+  if (opts.cacheOnly) {
+    const cached = businessBrief.loadCachedBusinessBrief(cfg, {
+      robotUuid,
+      appName,
+      understandResult: u.ok ? u.result : null,
+    });
+    return {
+      ...cached,
+      robotUuid,
+      appName,
+      xbotDir: u.ok ? u.xbotDir : null,
+      understandCached: !!(u.ok && u.cached),
+    };
+  }
+
+  if (!isLlmConfigured(cfg)) {
+    return {
+      ok: false,
+      code: 'llm_not_configured',
+      message: '未配置 LLM。请打开「设置」配置 API Key。',
+      robotUuid,
+    };
+  }
+
+  if (!u.ok) return { ...u, step: 'understand' };
+  if (!u.result || u.result.ok === false) {
+    return {
+      ok: false,
+      code: 'understand_failed',
+      message: (u.result && (u.result.reason || u.result.error)) || 'understand 未成功',
+      robotUuid,
+      understand: u,
+    };
+  }
+
+  const gen = await businessBrief.generateBusinessBrief(cfg, {
+    robotUuid,
+    appName,
+    understandResult: u.result,
+    force: opts.force === true,
+  });
+
+  return {
+    ...gen,
+    robotUuid,
+    appName,
+    xbotDir: u.xbotDir,
+    understandCached: !!u.cached,
+  };
+}
+
+/**
  * @param {string} robotUuid
  * @param {object} cfg
  */
@@ -767,6 +852,43 @@ function buildHealth(cfg, state = {}) {
   };
 }
 
+/**
+ * S26：LLM 设置（脱敏 GET / 保存 / 测试）
+ */
+function getLlmSettings(cfg) {
+  // eslint-disable-next-line global-require
+  const settingsLlm = require('./settings-llm');
+  const wb = getWorkbenchConfig(cfg);
+  const pub = settingsLlm.getPublicLlmSettings(cfg);
+  pub.settingsEnabled = wb.settingsEnabled;
+  return pub;
+}
+
+function saveLlmSettingsFromWeb(cfg, body) {
+  // eslint-disable-next-line global-require
+  const settingsLlm = require('./settings-llm');
+  const wb = getWorkbenchConfig(cfg);
+  const saved = settingsLlm.saveLlmSettings(cfg.dataDir, body || {}, {
+    settingsEnabled: wb.settingsEnabled,
+  });
+  if (!saved.ok) return saved;
+  // 调用方应重新 loadConfig；此处用新鲜配置做脱敏回显
+  // eslint-disable-next-line global-require
+  const { loadConfig } = require('./config');
+  const live = loadConfig();
+  return { ...getLlmSettings(live), ok: true, saved: true };
+}
+
+async function testLlmSettingsFromWeb(cfg, body) {
+  // eslint-disable-next-line global-require
+  const settingsLlm = require('./settings-llm');
+  const wb = getWorkbenchConfig(cfg);
+  if (!wb.settingsEnabled) {
+    return { ok: false, code: 'settings_disabled', message: 'workbench.settingsEnabled=false' };
+  }
+  return settingsLlm.testLlmConnection(cfg, body && Object.keys(body).length ? body : null);
+}
+
 module.exports = {
   getWorkbenchConfig,
   aggregateFailuresByRobot,
@@ -775,6 +897,7 @@ module.exports = {
   listAppsWithStats,
   getAppDetail,
   getAppUnderstand,
+  getAppBusinessBrief,
   openAppFolder,
   openAppWithAgent,
   listOpenAgents,
@@ -788,4 +911,7 @@ module.exports = {
   listReports,
   getReport,
   generateReport,
+  getLlmSettings,
+  saveLlmSettingsFromWeb,
+  testLlmSettingsFromWeb,
 };

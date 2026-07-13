@@ -530,7 +530,9 @@
               ? 'Finding'
               : route.name === 'reports' || route.name === 'report'
                 ? 'Reports'
-                : 'Workspace';
+                : route.name === 'settings'
+                  ? 'Settings'
+                  : 'Workspace';
     }
   }
 
@@ -672,7 +674,8 @@
     if (btn) {
       btn.disabled = true;
       btn.classList.add('busy');
-      btn.textContent = action === 'diagnose' ? '诊断中…' : '生成中…';
+      btn.textContent =
+        action === 'diagnose' ? (label && label.includes('重新') ? '重新诊断中…' : '诊断中…') : '生成中…';
     }
     try {
       const path =
@@ -682,7 +685,8 @@
       const r = await api(path, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ useLlm: false, force: action === 'fix-dry-run' }),
+        // 不传 useLlm → 服务端按 diagnoseUseLlm / settings；fix 仅 dry-run
+        body: JSON.stringify({ force: action === 'fix-dry-run' }),
       });
       if (r.ok) {
         if (action === 'diagnose') {
@@ -745,7 +749,184 @@
       };
     }
     if (parts[0] === 'apps') return { name: 'apps' };
+    if (parts[0] === 'settings') return { name: 'settings' };
     return { name: 'home' };
+  }
+
+  async function renderSettings() {
+    setNav('settings');
+    setHeader('设置', '本机 LLM 配置 · 写入 data/settings.llm.json（不改 config.local.js）');
+    activeCopyPath = '';
+    activeAgentPrompt = '';
+    content.innerHTML = loadingHtml('加载设置…');
+
+    const data = await api('/api/settings/llm');
+    if (!data || data.ok === false) {
+      content.innerHTML = `<div class="err">加载失败：${esc(data && (data.message || data.code))}</div>`;
+      return;
+    }
+
+    const locked = data.envLocked || {};
+    const ro = data.settingsEnabled === false;
+    const lockHint = (field) =>
+      locked[field]
+        ? `<span class="field-lock">环境变量锁定</span>`
+        : '';
+
+    content.innerHTML = `
+      <div class="panel settings-panel">
+        <h2>LLM</h2>
+        <p class="meta mb">
+          来源 <code>${esc(data.source || 'none')}</code>
+          · ${data.apiKeyConfigured ? '已配置 Key' : '未配置 Key'}
+          ${data.updatedAt ? `· 文件更新 ${esc(formatTime(data.updatedAt))}` : ''}
+        </p>
+        ${
+          ro
+            ? `<div class="tip mb">workbench.settingsEnabled=false，当前只读。</div>`
+            : `<p class="faint mb">优先级：环境变量 &gt; data/settings.llm.json &gt; config.local.js。API Key 留空保存表示不修改。</p>`
+        }
+        <form id="llm-form" class="settings-form" autocomplete="off">
+          <label class="field">
+            <span class="field-label">Base URL ${lockHint('baseUrl')}</span>
+            <input name="baseUrl" type="url" class="field-input" value="${esc(data.baseUrl || '')}"
+              placeholder="https://api.openai.com/v1" ${ro || locked.baseUrl ? 'readonly' : ''} />
+          </label>
+          <label class="field">
+            <span class="field-label">API Key ${lockHint('apiKey')}</span>
+            <input name="apiKey" type="password" class="field-input" value=""
+              placeholder="${esc(data.apiKeyMasked ? `已保存 ${data.apiKeyMasked} · 留空不修改` : 'sk-…')}"
+              ${ro || locked.apiKey ? 'readonly' : ''} />
+          </label>
+          <label class="field">
+            <span class="field-label">Model ${lockHint('model')}</span>
+            <input name="model" type="text" class="field-input" value="${esc(data.model || '')}"
+              placeholder="gpt-4o-mini" ${ro || locked.model ? 'readonly' : ''} />
+          </label>
+          <label class="field">
+            <span class="field-label">API 风格 ${lockHint('apiStyle')}</span>
+            <select name="apiStyle" class="field-input" ${ro || locked.apiStyle ? 'disabled' : ''}>
+              <option value="openai" ${data.apiStyle === 'openai' || !data.apiStyle ? 'selected' : ''}>openai（兼容）</option>
+              <option value="anthropic" ${data.apiStyle === 'anthropic' ? 'selected' : ''}>anthropic</option>
+            </select>
+          </label>
+          <label class="field">
+            <span class="field-label">超时 ms ${lockHint('timeoutMs')}</span>
+            <input name="timeoutMs" type="number" min="1000" step="1000" class="field-input"
+              value="${esc(data.timeoutMs || 600000)}" ${ro || locked.timeoutMs ? 'readonly' : ''} />
+          </label>
+          <label class="field field-check">
+            <input name="diagnoseUseLlm" type="checkbox" ${data.diagnoseUseLlm !== false ? 'checked' : ''} ${ro ? 'disabled' : ''} />
+            <span>诊断默认使用 LLM（service / 工作台一键 diagnose）</span>
+          </label>
+          <div class="settings-actions">
+            <button type="submit" class="btn primary" id="btn-llm-save" ${ro ? 'disabled' : ''}>保存</button>
+            <button type="button" class="btn" id="btn-llm-test" ${ro ? 'disabled' : ''}>测试连接</button>
+            <button type="button" class="btn ghost" id="btn-llm-clear-key" ${ro || locked.apiKey ? 'disabled' : ''}>清除 Key</button>
+          </div>
+          <p id="llm-test-result" class="meta mt" role="status"></p>
+        </form>
+      </div>`;
+
+    const form = $('#llm-form');
+    const resultEl = $('#llm-test-result');
+
+    function formBody({ clearKey = false } = {}) {
+      const fd = new FormData(form);
+      const body = {
+        baseUrl: String(fd.get('baseUrl') || '').trim(),
+        model: String(fd.get('model') || '').trim(),
+        apiStyle: String(fd.get('apiStyle') || 'openai'),
+        timeoutMs: parseInt(String(fd.get('timeoutMs') || '600000'), 10) || 600000,
+        diagnoseUseLlm: form.querySelector('[name=diagnoseUseLlm]').checked,
+      };
+      const key = String(fd.get('apiKey') || '');
+      if (clearKey) body.apiKey = '__CLEAR__';
+      else if (key.trim()) body.apiKey = key.trim();
+      // empty key omitted → keep
+      return body;
+    }
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      if (ro) return;
+      const btn = $('#btn-llm-save');
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = '保存中…';
+      }
+      try {
+        const r = await api('/api/settings/llm', {
+          method: 'PUT',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(formBody()),
+        });
+        if (r && r.ok) {
+          toast('LLM 设置已保存');
+          await renderSettings();
+        } else {
+          toast(r.message || r.code || '保存失败');
+        }
+      } catch (err) {
+        toast(err.message || '保存失败');
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = '保存';
+        }
+      }
+    });
+
+    const testBtn = $('#btn-llm-test');
+    if (testBtn) {
+      testBtn.addEventListener('click', async () => {
+        testBtn.disabled = true;
+        testBtn.textContent = '测试中…';
+        if (resultEl) resultEl.textContent = '';
+        try {
+          const r = await api('/api/settings/llm/test', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(formBody()),
+          });
+          if (r && r.ok) {
+            const msg = `连接成功 · ${r.latencyMs}ms · ${r.model || ''}${r.message ? ` · ${r.message}` : ''}`;
+            if (resultEl) resultEl.textContent = msg;
+            toast('LLM 连接成功');
+          } else {
+            const msg = r.message || r.code || '测试失败';
+            if (resultEl) resultEl.textContent = msg;
+            toast(msg);
+          }
+        } catch (err) {
+          if (resultEl) resultEl.textContent = err.message || '测试失败';
+          toast(err.message || '测试失败');
+        } finally {
+          testBtn.disabled = false;
+          testBtn.textContent = '测试连接';
+        }
+      });
+    }
+
+    const clearBtn = $('#btn-llm-clear-key');
+    if (clearBtn) {
+      clearBtn.addEventListener('click', async () => {
+        if (!confirm('确定清除已保存的 API Key？')) return;
+        try {
+          const r = await api('/api/settings/llm', {
+            method: 'PUT',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(formBody({ clearKey: true })),
+          });
+          if (r && r.ok) {
+            toast('API Key 已清除');
+            await renderSettings();
+          } else toast(r.message || '清除失败');
+        } catch (err) {
+          toast(err.message || '清除失败');
+        }
+      });
+    }
   }
 
   /** 极简 Markdown → HTML（日报足够；不做完整 CommonMark） */
@@ -1956,9 +2137,9 @@
         </div>
         <div class="actions mt">
           ${
-            !f.diagnosed
-              ? `<button type="button" class="btn" data-action="diagnose" data-fp="${esc(fingerprint)}">诊断</button>`
-              : ''
+            f.diagnosed
+              ? `<button type="button" class="btn" data-action="diagnose" data-fp="${esc(fingerprint)}">重新诊断</button>`
+              : `<button type="button" class="btn primary" data-action="diagnose" data-fp="${esc(fingerprint)}">诊断</button>`
           }
           ${
             canPreview
@@ -2100,6 +2281,22 @@
         }
       </div>
 
+      <div class="panel mt" id="business-brief-panel">
+        <div class="graph-bar">
+          <div>
+            <h2 style="margin:0">业务解读 <span class="badge warn">LLM 推测</span></h2>
+            <p class="hint" style="margin-top:4px">基于上方 understand 结构摘要调用模型；非正式业务文档</p>
+          </div>
+          <div class="actions">
+            <button type="button" class="btn sm primary" id="btn-business-brief">生成解读</button>
+            <button type="button" class="btn sm ghost" id="btn-business-brief-refresh" title="忽略缓存重新生成">重新生成</button>
+          </div>
+        </div>
+        <div id="business-brief-body" class="mt">
+          <p class="faint">加载已保存解读…</p>
+        </div>
+      </div>
+
       <details class="panel mt fold">
         <summary>业务阶段与流程清单</summary>
         <div class="grid-2 mt">
@@ -2172,6 +2369,110 @@
 
     const refreshBtn = tabBody.querySelector('[data-refresh-flow]');
     if (refreshBtn) refreshBtn.onclick = () => renderAppFlow(robotUuid, detail, true);
+
+    function renderBriefInto(el, data) {
+      if (!el) return;
+      if (!data || data.ok === false) {
+        el.innerHTML = `<div class="err">${esc((data && (data.message || data.code)) || '解读失败')}</div>`;
+        return;
+      }
+      if (!data.brief) {
+        el.innerHTML = `<p class="faint">尚未生成。点「生成解读」将调用 LLM 并保存到本机缓存，刷新后仍可查看。</p>`;
+        return;
+      }
+      const b = data.brief || {};
+      const conf =
+        b.confidence != null && Number.isFinite(Number(b.confidence))
+          ? `置信 ${Math.round(Number(b.confidence) * 100)}%`
+          : '';
+      const list = (arr) =>
+        arr && arr.length
+          ? `<ul class="plain-list">${arr.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>`
+          : '<div class="muted">—</div>';
+      el.innerHTML = `
+        <p class="hint">${esc(data.disclaimer || '模型推测')}${
+          data.cached ? ' · 已保存' : ' · 刚生成'
+        }${data.stale ? ' · 流程结构有更新，解读可能偏旧' : ''}${
+          data.model ? ` · ${esc(data.model)}` : ''
+        }${data.generatedAt ? ` · ${esc(formatTime(data.generatedAt))}` : ''}${
+          data.latencyMs != null ? ` · ${esc(data.latencyMs)}ms` : ''
+        }${conf ? ` · ${esc(conf)}` : ''}</p>
+        <h3 class="mt" style="margin-bottom:6px;font-size:15px">${esc(b.title || '业务解读')}</h3>
+        <p class="summary-line">${esc(b.purpose || '—')}</p>
+        <div class="grid-2 mt">
+          <div>
+            <h2>业务步骤</h2>
+            ${list(b.businessFlow)}
+            <h2 class="mt">业务对象</h2>
+            ${list(b.dataObjects)}
+          </div>
+          <div>
+            <h2>涉及系统</h2>
+            ${list(b.systems)}
+            <h2 class="mt">风险</h2>
+            ${list(b.risks)}
+          </div>
+        </div>
+        ${
+          b.techHighlights && b.techHighlights.length
+            ? `<h2 class="mt">实现要点</h2>${list(b.techHighlights)}`
+            : ''
+        }
+        ${
+          b.openQuestions && b.openQuestions.length
+            ? `<h2 class="mt">待业务确认</h2>${list(b.openQuestions)}`
+            : ''
+        }
+      `;
+    }
+
+    async function runBusinessBrief(force) {
+      const bodyEl = $('#business-brief-body');
+      const btn = $('#btn-business-brief');
+      const btn2 = $('#btn-business-brief-refresh');
+      if (bodyEl) bodyEl.innerHTML = loadingHtml(force ? '重新生成业务解读…' : '生成业务解读…');
+      [btn, btn2].forEach((b) => {
+        if (b) b.disabled = true;
+      });
+      try {
+        const data = await api(`/api/apps/${encodeURIComponent(robotUuid)}/business-brief`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ force: !!force }),
+        });
+        renderBriefInto(bodyEl, data);
+        if (data && data.ok && data.brief) {
+          toast(data.cached ? '已加载保存的解读' : '业务解读已生成并保存');
+        } else toast((data && data.message) || '解读失败');
+      } catch (e) {
+        if (bodyEl) bodyEl.innerHTML = `<div class="err">${esc(e.message || e)}</div>`;
+        toast(e.message || '解读失败');
+      } finally {
+        [btn, btn2].forEach((b) => {
+          if (b) b.disabled = false;
+        });
+      }
+    }
+
+    const briefBtn = $('#btn-business-brief');
+    if (briefBtn) briefBtn.onclick = () => runBusinessBrief(false);
+    const briefRefresh = $('#btn-business-brief-refresh');
+    if (briefRefresh) briefRefresh.onclick = () => runBusinessBrief(true);
+
+    // 进入页面自动加载本机已保存解读（不调 LLM）
+    (async () => {
+      const bodyEl = $('#business-brief-body');
+      try {
+        const data = await api(`/api/apps/${encodeURIComponent(robotUuid)}/business-brief`);
+        renderBriefInto(bodyEl, data);
+      } catch {
+        if (bodyEl) {
+          bodyEl.innerHTML =
+            '<p class="faint">尚未生成。点「生成解读」将调用 LLM 并保存，刷新后仍可查看。</p>';
+        }
+      }
+    })();
+
     if (mermaidSrc) {
       const preview = $('#mermaid-host');
       const pngUrl = await renderMermaidInto(preview, mermaidSrc);
@@ -2197,6 +2498,7 @@
       if (r.name === 'finding') await renderFinding(r.fingerprint);
       else if (r.name === 'reports') await renderReports();
       else if (r.name === 'report') await renderReport(r.date);
+      else if (r.name === 'settings') await renderSettings();
       else if (r.name === 'apps') await renderApps();
       else if (r.name === 'app') {
         const tab = r.tab === 'flow' || r.tab === 'failures' ? r.tab : 'overview';

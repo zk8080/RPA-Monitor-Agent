@@ -25,7 +25,8 @@ function parseArgs(argv) {
     report: true,
     diagnoseLimit: 10,
     help: false,
-    noLlm: true,
+    // null = 跟随 config.diagnoseUseLlm；true/false = CLI 强制
+    forceNoLlm: null,
   };
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
@@ -33,7 +34,8 @@ function parseArgs(argv) {
     else if (a === '--no-diagnose') opts.diagnose = false;
     else if (a === '--no-report') opts.report = false;
     else if (a === '--diagnose-limit') opts.diagnoseLimit = parseInt(argv[++i], 10) || 10;
-    else if (a === '--llm') opts.noLlm = false;
+    else if (a === '--llm') opts.forceNoLlm = false;
+    else if (a === '--no-llm') opts.forceNoLlm = true;
     else if (a === '--help' || a === '-h') opts.help = true;
   }
   return opts;
@@ -50,12 +52,14 @@ function printHelp() {
   --no-diagnose        不跑诊断
   --no-report          不生成日报
   --diagnose-limit N   每轮最多诊断条数（默认 10）
-  --llm                诊断启用 LLM 增强（默认纯规则）
+  --llm                强制诊断启用 LLM
+  --no-llm             强制纯规则（覆盖 settings diagnoseUseLlm）
   -h, --help           帮助
 
 常驻时：
   - 每 pollIntervalMinutes 执行 poll
   - 每轮 poll 后 drain 未诊断队列（limit）
+  - 默认是否 LLM：settings.llm.json 的 diagnoseUseLlm（可用 --llm / --no-llm 覆盖）
   - diagnoseCron / reportCron（分 时 * * *）触发额外诊断/日报
   - healthPort>0 时提供 GET /health + 本机工作台 http://127.0.0.1:<port>/
   - data/service.pid 单实例锁
@@ -95,10 +99,25 @@ function log(msg) {
   }
 }
 
+function resolveUseLlm(cfg, opts) {
+  if (opts.forceNoLlm === true) return false;
+  if (opts.forceNoLlm === false) return true;
+  return cfg.diagnoseUseLlm !== false;
+}
+
 async function runPipeline(cfg, opts, label = 'cycle') {
+  // 每轮热读配置（Web 改 LLM 后无需重启）
+  let liveCfg = cfg;
+  try {
+    // eslint-disable-next-line global-require
+    liveCfg = require('./lib/config').loadConfig();
+  } catch {
+    liveCfg = cfg;
+  }
+
   log(`▶ ${label}: poll`);
   // 翻页上限走配置 pollMaxPages（默认 50），不再写死 3 页≈150 条
-  const pollResult = await pollOnce(cfg, { enrichLogs: true });
+  const pollResult = await pollOnce(liveCfg, { enrichLogs: true });
   log(
     `  poll done scanned=${pollResult.stats.scanned} failed=${pollResult.stats.failed} ` +
       `new=${pollResult.stats.enqueued} updated=${pollResult.stats.updated}` +
@@ -108,15 +127,19 @@ async function runPipeline(cfg, opts, label = 'cycle') {
 
   let diagnoseResult = null;
   if (opts.diagnose) {
-    log(`▶ ${label}: diagnose --queue --limit ${opts.diagnoseLimit}`);
+    const useLlm = resolveUseLlm(liveCfg, opts);
+    const keyOn = Boolean(liveCfg.llmApiKey || (liveCfg.llm && liveCfg.llm.apiKey));
+    log(
+      `▶ ${label}: diagnose --queue --limit ${opts.diagnoseLimit} useLlm=${useLlm} llmConfigured=${keyOn}`,
+    );
     diagnoseResult = await runSkill(
       'diagnose',
       {
         queue: true,
         limit: opts.diagnoseLimit,
-        useLlm: !opts.noLlm,
+        useLlm,
       },
-      { cfg },
+      { cfg: liveCfg },
     );
     if (diagnoseResult.ok) {
       log(
@@ -139,7 +162,7 @@ async function runPipeline(cfg, opts, label = 'cycle') {
   let reportResult = null;
   if (opts.report) {
     log(`▶ ${label}: report`);
-    reportResult = buildDailyReport(cfg, { write: true });
+    reportResult = buildDailyReport(liveCfg, { write: true });
     log(`  report → ${reportResult.filePath} roots=${reportResult.stats.rootCauseCount}`);
   }
 
@@ -237,10 +260,21 @@ async function runPipeline(cfg, opts, label = 'cycle') {
           if (sk && sk !== state.firedDiagnoseSlot) {
             state.firedDiagnoseSlot = sk;
             log('▶ cron diagnose');
+            let liveCfg = cfg;
+            try {
+              // eslint-disable-next-line global-require
+              liveCfg = require('./lib/config').loadConfig();
+            } catch {
+              /* keep */
+            }
             await runSkill(
               'diagnose',
-              { queue: true, limit: opts.diagnoseLimit, useLlm: !opts.noLlm },
-              { cfg },
+              {
+                queue: true,
+                limit: opts.diagnoseLimit,
+                useLlm: resolveUseLlm(liveCfg, opts),
+              },
+              { cfg: liveCfg },
             );
             state.lastDiagnoseAt = new Date().toISOString();
           }

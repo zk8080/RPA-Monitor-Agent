@@ -1378,3 +1378,36 @@ details.fold[open] > summary::before { content: "▾ "; }
     background: var(--surface-inset);
   }
 }
+
+/* Settings (S26 LLM) */
+.settings-panel { max-width: 560px; }
+.settings-form { display: flex; flex-direction: column; gap: 14px; margin-top: 8px; }
+.field { display: flex; flex-direction: column; gap: 6px; }
+.field-label { font-size: 12px; font-weight: 600; color: var(--text-2); letter-spacing: 0.02em; }
+.field-lock { margin-left: 8px; font-weight: 500; color: var(--warn); font-size: 11px; }
+.field-input {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: var(--surface);
+  color: var(--text);
+  outline: none;
+  transition: border-color 0.15s var(--ease), box-shadow 0.15s var(--ease);
+}
+.field-input:focus {
+  border-color: rgba(67, 56, 202, 0.4);
+  box-shadow: var(--focus);
+}
+.field-input[readonly], .field-input:disabled {
+  background: var(--surface-inset);
+  color: var(--text-2);
+}
+.field-check {
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+  color: var(--text-2);
+}
+.field-check input { width: 16px; height: 16px; accent-color: var(--accent); }
+.settings-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 4px; }

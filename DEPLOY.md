@@ -161,9 +161,11 @@ node -e "const c=require('./monitor/lib/config').loadConfig(); console.log(c.rpa
 | `diagnoseCron` / `reportCron` | 额外诊断/日报（分 时） | `0 9 * * *` / `5 9 * * *` |
 | `healthPort` | HTTP 健康检查 | **8787**（0=关闭） |
 | `rpaSkillPath` | rpa-skill **本机**路径 | 见上文方案 A；也可用 `RPA_SKILL_PATH` |
-| `llmBaseUrl` / `llmApiKey` / `llmModel` | 通用 LLM（OpenAI 兼容） | 可选；无 apiKey 则纯规则 |
+| `llmBaseUrl` / `llmApiKey` / `llmModel` | 通用 LLM（OpenAI 兼容）底稿 | 可选；也可用工作台 **设置** 写 `data/settings.llm.json` |
 | `llmApiStyle` | `openai`（默认）或 `anthropic` | 三方中转一般用 openai |
 | `llmTimeoutMs` | LLM 超时 ms | 默认 **600000**（10 分钟） |
+| （文件）`data/settings.llm.json` | Web 可写 LLM 覆盖层 | **env > 此文件 > config.local**；含 key，勿提交 |
+| `diagnoseUseLlm` / `DIAGNOSE_USE_LLM` | service/工作台默认是否用 LLM | 默认 true（无 key 仍走规则） |
 | `pollLookbackHours` | 感知时间窗（小时） | 默认 **24** |
 | `pollMaxPages` | 时间窗内最多翻页（CLI **与 service 共用**） | 默认 **50**（约 50×size 条/轮上限） |
 | `shadowbotUserId` / `shadowbotUsersRoot` | 本机流程自动发现 | Windows 有客户端时可填 userId 固定账号 |

@@ -1,5 +1,5 @@
 /**
- * 配置加载：环境变量 > config.local.js > 默认值
+ * 配置加载：环境变量 > data/settings.llm.json > config.local.js > 默认值
  * 供 poll / agent / verify / lib 共用。
  */
 
@@ -68,7 +68,7 @@ function firstNonEmpty(...vals) {
 }
 
 /**
- * @returns {typeof DEFAULTS & { dataDir: string, rootDir: string, monitorDir: string, llm: object }}
+ * @returns {typeof DEFAULTS & { dataDir: string, rootDir: string, monitorDir: string, llm: object, diagnoseUseLlm: boolean }}
  */
 function loadConfig() {
   const local = loadLocalConfig();
@@ -77,10 +77,21 @@ function loadConfig() {
   const size = Math.min(100, Math.max(1, parseInt(String(sizeRaw), 10) || 50));
   const dataDir = resolveDataDir(local);
 
+  // Web 可写覆盖层（懒加载，避免循环依赖问题）
+  let fileOverlay = {};
+  try {
+    // eslint-disable-next-line global-require
+    fileOverlay = require('./settings-llm').getFileOverlay(dataDir) || {};
+  } catch {
+    fileOverlay = {};
+  }
+
+  // env > data/settings.llm.json > config.local.js > defaults
   const llmApiKey =
     firstNonEmpty(
       process.env.LLM_API_KEY,
       process.env.OPENAI_API_KEY,
+      fileOverlay.apiKey,
       nestedLlm.apiKey,
       local.llmApiKey,
       process.env.ANTHROPIC_API_KEY,
@@ -92,6 +103,7 @@ function loadConfig() {
     firstNonEmpty(
       process.env.LLM_BASE_URL,
       process.env.OPENAI_BASE_URL,
+      fileOverlay.baseUrl,
       nestedLlm.baseUrl,
       local.llmBaseUrl,
       process.env.ANTHROPIC_BASE_URL,
@@ -103,6 +115,7 @@ function loadConfig() {
     firstNonEmpty(
       process.env.LLM_MODEL,
       process.env.OPENAI_MODEL,
+      fileOverlay.model,
       nestedLlm.model,
       local.llmModel,
       process.env.ANTHROPIC_MODEL,
@@ -113,6 +126,7 @@ function loadConfig() {
   const llmApiStyle =
     firstNonEmpty(
       process.env.LLM_API_STYLE,
+      fileOverlay.apiStyle,
       nestedLlm.apiStyle,
       local.llmApiStyle,
       DEFAULTS.llmApiStyle,
@@ -123,6 +137,7 @@ function loadConfig() {
       String(
         firstNonEmpty(
           process.env.LLM_TIMEOUT_MS,
+          fileOverlay.timeoutMs,
           nestedLlm.timeoutMs,
           local.llmTimeoutMs,
           DEFAULTS.llmTimeoutMs,
@@ -131,6 +146,19 @@ function loadConfig() {
       10,
     ) || 600000;
 
+  // diagnoseUseLlm：env DIAGNOSE_USE_LLM=0/1 > file > local > 默认 true（有 key 时 service 才真正调模型）
+  let diagnoseUseLlm = true;
+  if (process.env.DIAGNOSE_USE_LLM != null && String(process.env.DIAGNOSE_USE_LLM).trim() !== '') {
+    diagnoseUseLlm = !/^(0|false|no|off)$/i.test(String(process.env.DIAGNOSE_USE_LLM).trim());
+  } else if (fileOverlay.hasFile) {
+    diagnoseUseLlm = fileOverlay.diagnoseUseLlm !== false;
+  } else if (local.diagnoseUseLlm != null) {
+    diagnoseUseLlm = local.diagnoseUseLlm !== false;
+  } else if (local.workbench && local.workbench.diagnoseUseLlm != null) {
+    diagnoseUseLlm = local.workbench.diagnoseUseLlm !== false;
+  }
+
+  const workbenchLocal = local.workbench && typeof local.workbench === 'object' ? local.workbench : {};
 
   return {
     ...DEFAULTS,
@@ -146,6 +174,7 @@ function loadConfig() {
     llmModel,
     llmApiStyle,
     llmTimeoutMs,
+    diagnoseUseLlm,
     // 统一嵌套对象，供 lib/llm 使用
     llm: {
       baseUrl: llmBaseUrl,
@@ -174,6 +203,10 @@ function loadConfig() {
       String(firstNonEmpty(process.env.HEALTH_PORT, local.healthPort, DEFAULTS.healthPort)),
       10,
     ),
+    workbench: {
+      ...workbenchLocal,
+      settingsEnabled: workbenchLocal.settingsEnabled !== false,
+    },
     dataDir,
     rootDir: ROOT,
     monitorDir: MONITOR_DIR,

@@ -90,7 +90,15 @@ function readBody(req, limit = 1e6) {
  * @returns {Promise<boolean>} handled
  */
 async function handleRequest(req, res, ctx) {
-  const cfg = ctx.cfg;
+  // 每次请求热读 config（含 data/settings.llm.json），避免常驻 service 持有旧 cfg
+  let cfg = ctx.cfg;
+  try {
+    // eslint-disable-next-line global-require
+    const { loadConfig } = require('../config');
+    cfg = loadConfig();
+  } catch {
+    cfg = ctx.cfg;
+  }
   const state = ctx.state || {};
   const wb = workbench.getWorkbenchConfig(cfg);
 
@@ -121,6 +129,38 @@ async function handleRequest(req, res, ctx) {
   // API
   if (pathname.startsWith('/api/')) {
     try {
+      // S26：LLM 设置
+      if (method === 'GET' && pathname === '/api/settings/llm') {
+        sendJson(res, 200, workbench.getLlmSettings(cfg));
+        return true;
+      }
+      if (method === 'PUT' && pathname === '/api/settings/llm') {
+        let body = {};
+        try {
+          const raw = await readBody(req);
+          if (raw) body = JSON.parse(raw);
+        } catch {
+          sendJson(res, 400, { ok: false, code: 'bad_json', message: '请求体须为 JSON' });
+          return true;
+        }
+        const result = workbench.saveLlmSettingsFromWeb(cfg, body);
+        const status = result.ok ? 200 : result.code === 'settings_disabled' ? 403 : 400;
+        sendJson(res, status, result);
+        return true;
+      }
+      if (method === 'POST' && pathname === '/api/settings/llm/test') {
+        let body = {};
+        try {
+          const raw = await readBody(req);
+          if (raw) body = JSON.parse(raw);
+        } catch {
+          body = {};
+        }
+        const result = await workbench.testLlmSettingsFromWeb(cfg, body);
+        sendJson(res, result.ok ? 200 : result.code === 'settings_disabled' ? 403 : 400, result);
+        return true;
+      }
+
       if (method === 'GET' && pathname === '/api/overview') {
         sendJson(res, 200, workbench.buildOverview(cfg, state));
         return true;
@@ -138,6 +178,39 @@ async function handleRequest(req, res, ctx) {
         const skipCache = url.searchParams.get('refresh') === '1';
         const result = workbench.getAppUnderstand(robotUuid, cfg, { flowName, skipCache });
         sendJson(res, result.ok ? 200 : 404, result);
+        return true;
+      }
+
+      // 业务解读：GET 只读缓存；POST 生成（可 force）
+      const appBrief = pathname.match(/^\/api\/apps\/([^/]+)\/business-brief\/?$/);
+      if (method === 'GET' && appBrief) {
+        const robotUuid = decodeURIComponent(appBrief[1]);
+        const result = await workbench.getAppBusinessBrief(robotUuid, cfg, {
+          cacheOnly: true,
+          flowName: url.searchParams.get('flowName') || '',
+        });
+        sendJson(res, result.ok ? 200 : 400, result);
+        return true;
+      }
+      if (method === 'POST' && appBrief) {
+        const robotUuid = decodeURIComponent(appBrief[1]);
+        let body = {};
+        try {
+          const raw = await readBody(req);
+          if (raw) body = JSON.parse(raw);
+        } catch {
+          body = {};
+        }
+        const result = await workbench.getAppBusinessBrief(robotUuid, cfg, {
+          force: body.force === true || url.searchParams.get('refresh') === '1',
+          flowName: body.flowName || url.searchParams.get('flowName') || '',
+        });
+        const status = result.ok
+          ? 200
+          : result.code === 'llm_not_configured' || result.code === 'actions_disabled'
+            ? 403
+            : 400;
+        sendJson(res, status, result);
         return true;
       }
 
@@ -198,15 +271,13 @@ async function handleRequest(req, res, ctx) {
         } catch {
           body = {};
         }
-        const result = await workbench.runWorkbenchAction(
-          action,
-          {
-            fingerprint,
-            useLlm: body.useLlm === true,
-            force: body.force === true,
-          },
-          cfg,
-        );
+        // useLlm：仅当 body 显式传 boolean 时覆盖；否则走 cfg.diagnoseUseLlm
+        const actionInput = {
+          fingerprint,
+          force: body.force === true,
+        };
+        if (typeof body.useLlm === 'boolean') actionInput.useLlm = body.useLlm;
+        const result = await workbench.runWorkbenchAction(action, actionInput, cfg);
         const status = result.ok ? 200 : result.code === 'busy' ? 409 : result.code === 'actions_disabled' ? 403 : 400;
         sendJson(res, status, result);
         return true;

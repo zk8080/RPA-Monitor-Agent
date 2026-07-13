@@ -30,15 +30,17 @@ module.exports = {
 
 
   // ===== 通用 LLM（推荐，任意 OpenAI 兼容三方）=====
+  // 优先级：环境变量 > data/settings.llm.json（工作台「设置」页可写）> 本文件 > 默认
   // 不填 apiKey 则 diagnose 走纯规则，不调模型
-  // 也可用环境变量：LLM_BASE_URL / LLM_API_KEY / LLM_MODEL / LLM_API_STYLE
+  // 也可用环境变量：LLM_BASE_URL / LLM_API_KEY / LLM_MODEL / LLM_API_STYLE / DIAGNOSE_USE_LLM
   //
-  // 方式 A：平铺
+  // 方式 A：平铺（底稿；日常更推荐 Web 设置写入 data/settings.llm.json）
   llmBaseUrl: 'https://api.openai.com/v1', // 或 https://your-gateway.com/v1
   llmApiKey: '',
   llmModel: 'gpt-4o-mini',
   llmApiStyle: 'openai', // openai | anthropic
   llmTimeoutMs: 600000, // 默认 600s，慢模型/代理可再加大
+  // diagnoseUseLlm: true, // service/工作台默认是否用 LLM（可被 data/settings 覆盖）
 
   //
   // 方式 B：嵌套（与平铺二选一即可，嵌套优先于部分平铺合并逻辑见 config.js）
@@ -99,6 +101,7 @@ module.exports = {
     openFolderEnabled: true, // POST 打开 xbot 目录 / open-agent
     understandCache: true, // data/cache/understand
     actionsEnabled: true, // S25b：Web 一键 diagnose / fix dry-run（永不 apply）
+    settingsEnabled: true, // S26：Web 配置 LLM（data/settings.llm.json）
     // openCommand: null, // 可选：自定义打开文件夹命令，默认 Windows explorer
     // agents：在 Coding Agent 打开（默认 cursor / vscode / qoder / claude / codex）
     // 对象按 id 覆盖；false 禁用；或传数组全量替换

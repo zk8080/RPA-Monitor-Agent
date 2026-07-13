@@ -11,6 +11,7 @@
 | [TECH-DESIGN.md](TECH-DESIGN.md) | 技术方案（**以实现对齐版为准**） |
 | [ARCHITECTURE-FREEZE.md](ARCHITECTURE-FREEZE.md) | **架构冻结 / 防漂（实现必遵）** |
 | [WEB-WORKBENCH-MVP.md](WEB-WORKBENCH-MVP.md) | **本机 Web 工作台 MVP 实现计划（S25）** |
+| [PLAN-LLM-WEB-SETTINGS.md](PLAN-LLM-WEB-SETTINGS.md) | **S26 工作台配置 LLM（已实现）** |
 | [PRODUCT.md](PRODUCT.md) / [DESIGN.md](DESIGN.md) | **Web 工作台产品与视觉上下文（impeccable）** |
 | [DEPLOY.md](DEPLOY.md) | **服务器部署** |
 | [README.md](README.md) | 仓库说明 |
@@ -37,8 +38,8 @@
 | maintain | playbook skill：`inspect` / `fix`（默认 dry-run）/ `rollback` |
 | 写盘 | 仅 `maintain fix --apply` + autoFix 配置；**service 不自动改 py** |
 | report | 本轮 findings 条数，无历史 occurrence 展示 |
-| workbench | 失败时间 **绝对本地时间**；跨应用卡片不展示内部 errorSignature |
-| LLM | `lib/llm.js`；timeout 默认 600s |
+| workbench | 失败时间 **绝对本地时间**；跨应用卡片不展示内部 errorSignature；**设置页**配 LLM；业务流程 **业务解读(LLM)** |
+| LLM | `lib/llm.js`；timeout 默认 600s；**env > data/settings.llm.json > config.local**；`diagnoseUseLlm` |
 | 形态 | **Agent skills + tools**；CLI/service 为触发方式，非「散装脚本身份」 |
 | 验证补充 | `node monitor/test_queue_time.js` |
 
@@ -66,7 +67,9 @@ D:\RPA-Monitor-Agent  消费：监听 OpenAPI + 诊断 Agent + 日报 / KB
    - `node monitor/agent.js maintain inspect --robot <uuid>`  
    - `node monitor/test_maintain.js`
    - `node monitor/test_workbench.js`
-   - `node monitor/test_queue_time.js`  
+   - `node monitor/test_queue_time.js`
+   - `node monitor/test_settings_llm.js`  
+
 
 4. 密钥：`config.local.js` gitignore  
 
@@ -87,6 +90,8 @@ D:\RPA-Monitor-Agent  消费：监听 OpenAPI + 诊断 Agent + 日报 / KB
   - **P2 后置：** S21 服务器源码（暂无需求）  
   - **P2 ⏸ S10c** fixOwner：归属划分未明确，暂缓  
   - **P2 ⏸ S22** develop 骨架：不如直接 Coding Agent，暂缓  
+  - ✅ **S26** 工作台配置 LLM（`data/settings.llm.json` + `/settings`）  
+
   - **P3：** tool-loop / 对话入口（可选）  
   - **禁止：** service 默认 apply 生产 py；Web 复制平行业务栈  
 
