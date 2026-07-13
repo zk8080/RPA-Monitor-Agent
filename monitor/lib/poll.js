@@ -76,11 +76,16 @@ async function pollOnce(cfg, options = {}) {
     triggerTimeBegin: triggerTimeBegin || null,
     triggerTimeEnd: triggerTimeEnd || null,
     truncated: false,
+    /** 任务名索引：扫到的 job 条数（含成功） */
+    taskNameJobs: 0,
+    taskNameRobots: 0,
   };
 
   const samples = [];
   const findings = [];
   const seenFp = new Set();
+  /** 本轮所有 job（含成功）用于写 task-index */
+  const taskNameJobs = [];
 
   while (pages < maxPages) {
     const result = await yingdao.listJobs(token, {
@@ -98,12 +103,30 @@ async function pollOnce(cfg, options = {}) {
     stats.scanned += dataList.length;
 
     for (const job of dataList) {
+      // 成功/失败都记任务名 + 运行客户端（列表不依赖失败入队）
+      if (job && job.robotUuid && (job.taskName || job.robotClientName)) {
+        taskNameJobs.push({
+          robotUuid: job.robotUuid,
+          robotName: job.robotName,
+          taskName: job.taskName,
+          robotClientName: job.robotClientName,
+          robotClientUuid: job.robotClientUuid,
+          status: job.status,
+          triggerTime: job.triggerTime,
+          updateTime: job.updateTime,
+          endTime: job.endTime,
+        });
+      }
+
       if (!isFailedStatus(job.status)) continue;
       stats.failed += 1;
 
       let fp = buildFingerprint({
         robotUuid: job.robotUuid,
         robotName: job.robotName,
+        taskName: job.taskName,
+        robotClientName: job.robotClientName,
+        robotClientUuid: job.robotClientUuid,
         remark: job.remark,
         jobUuid: job.jobUuid,
       });
@@ -115,6 +138,9 @@ async function pollOnce(cfg, options = {}) {
           fp = buildFingerprint({
             robotUuid: job.robotUuid,
             robotName: job.robotName,
+            taskName: job.taskName,
+            robotClientName: job.robotClientName,
+            robotClientUuid: job.robotClientUuid,
             remark: job.remark,
             jobUuid: job.jobUuid,
             logs: logRes.logs,
@@ -218,6 +244,15 @@ async function pollOnce(cfg, options = {}) {
 
   if (pages >= maxPages) {
     stats.truncated = true;
+  }
+
+  // 任务名索引：本轮扫到的全部 job（含成功）写入 data/task-index.json
+  try {
+    const ti = memory.upsertTaskNamesFromJobs(dataDir, taskNameJobs);
+    stats.taskNameJobs = ti.touched;
+    stats.taskNameRobots = ti.robots;
+  } catch {
+    // ignore index errors
   }
 
   const now = new Date().toISOString();

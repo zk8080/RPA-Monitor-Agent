@@ -88,7 +88,10 @@ assert.ok(overview.problemApps.some((p) => p.robotUuid === 'r-demo'));
 
 const apps = listAppsWithStats(cfg);
 assert.strictEqual(apps.ok, true);
-assert.strictEqual(apps.count, 0);
+// 本机空目录时仍会合并 queue 中的失败应用
+assert.strictEqual(apps.localCount, 0);
+assert.ok(apps.count >= 1);
+assert.ok(apps.apps.some((a) => a.robotUuid === 'r-demo'));
 
 const detail = getAppDetail('r-demo', cfg);
 assert.strictEqual(detail.ok, true);

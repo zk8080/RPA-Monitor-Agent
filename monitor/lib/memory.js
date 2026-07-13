@@ -37,7 +37,119 @@ function paths(dataDir) {
     kbDir: path.join(dataDir, 'kb'),
     reportsDir: path.join(dataDir, 'reports'),
     appMap: path.join(dataDir, 'app-map.json'),
+    /** robotUuid → 调度任务名索引（含成功 job，不依赖失败入队） */
+    taskIndex: path.join(dataDir, 'task-index.json'),
   };
+}
+
+/**
+ * 加载任务名索引
+ * @param {string} dataDir
+ * @returns {{ version: number, updatedAt: string|null, byRobot: Object<string, object> }}
+ */
+function loadTaskIndex(dataDir) {
+  const raw = readJson(paths(dataDir).taskIndex, null);
+  if (!raw || typeof raw !== 'object') {
+    return { version: 1, updatedAt: null, byRobot: {} };
+  }
+  return {
+    version: 1,
+    updatedAt: raw.updatedAt || null,
+    byRobot: raw.byRobot && typeof raw.byRobot === 'object' ? raw.byRobot : {},
+  };
+}
+
+/**
+ * 从 job 列表增量更新任务名 / 运行客户端索引（成功/失败都记）
+ * @param {string} dataDir
+ * @param {Array<{
+ *   robotUuid?: string,
+ *   robotName?: string,
+ *   taskName?: string,
+ *   robotClientName?: string,
+ *   robotClientUuid?: string,
+ *   status?: string,
+ *   triggerTime?: string,
+ * }>} jobs
+ * @returns {{ touched: number, robots: number }}
+ */
+function upsertTaskNamesFromJobs(dataDir, jobs) {
+  if (!Array.isArray(jobs) || !jobs.length) {
+    return { touched: 0, robots: 0 };
+  }
+  const idx = loadTaskIndex(dataDir);
+  let touched = 0;
+  const now = new Date().toISOString();
+
+  for (const job of jobs) {
+    const robotUuid = job && job.robotUuid ? String(job.robotUuid).trim() : '';
+    const taskName = job && job.taskName != null ? String(job.taskName).trim() : '';
+    const robotClientName =
+      job && job.robotClientName != null ? String(job.robotClientName).trim() : '';
+    const robotClientUuid =
+      job && job.robotClientUuid != null ? String(job.robotClientUuid).trim() : '';
+    // 至少要有任务名或客户端名之一才值得写入
+    if (!robotUuid || (!taskName && !robotClientName)) continue;
+
+    let row = idx.byRobot[robotUuid];
+    if (!row || typeof row !== 'object') {
+      row = {
+        robotUuid,
+        robotName: '',
+        taskName: '',
+        taskNames: [],
+        robotClientName: '',
+        robotClientUuid: '',
+        lastStatus: '',
+        lastSeenAt: null,
+        updatedAt: now,
+      };
+      idx.byRobot[robotUuid] = row;
+    }
+
+    if (job.robotName) row.robotName = String(job.robotName);
+    if (!Array.isArray(row.taskNames)) row.taskNames = [];
+    if (taskName) {
+      row.taskNames = [taskName, ...row.taskNames.filter((t) => t !== taskName)].slice(0, 12);
+    }
+    if (job.status != null) row.lastStatus = String(job.status);
+    // 用 job 时间作「最近见到」；无则用 poll 时刻
+    const seen =
+      normalizeTime(job.triggerTime) ||
+      normalizeTime(job.updateTime) ||
+      normalizeTime(job.endTime) ||
+      now;
+    if (!row.lastSeenAt || String(seen) >= String(row.lastSeenAt)) {
+      row.lastSeenAt = seen;
+      if (taskName) row.taskName = taskName;
+      if (robotClientName) row.robotClientName = robotClientName;
+      if (robotClientUuid) row.robotClientUuid = robotClientUuid;
+    } else {
+      // 非最新 job 仍可补空字段
+      if (taskName && !row.taskName) row.taskName = taskName;
+      if (robotClientName && !row.robotClientName) row.robotClientName = robotClientName;
+      if (robotClientUuid && !row.robotClientUuid) row.robotClientUuid = robotClientUuid;
+    }
+    row.updatedAt = now;
+    touched += 1;
+  }
+
+  if (touched > 0) {
+    idx.updatedAt = now;
+    atomicWriteJson(paths(dataDir).taskIndex, idx);
+  }
+  return { touched, robots: Object.keys(idx.byRobot).length };
+}
+
+/**
+ * @param {string} dataDir
+ * @param {string} robotUuid
+ * @returns {object|null}
+ */
+function getTaskIndexEntry(dataDir, robotUuid) {
+  if (!robotUuid) return null;
+  const idx = loadTaskIndex(dataDir);
+  return idx.byRobot[robotUuid] || null;
 }
 
 function loadCursor(dataDir) {
@@ -176,11 +288,31 @@ function upsertQueueItem(dataDir, item, meta = {}) {
   const lastSeen = lastFailureAt || existing?.lastSeen || now;
   const firstSeen = firstFailureAt || existing?.firstSeen || lastSeen;
 
+  // 调度任务名：保留最近出现过的 taskName（同一应用可挂多个任务）
+  const taskName = (item.taskName || existing?.taskName || '').trim();
+  let recentTaskNames = Array.isArray(existing?.recentTaskNames)
+    ? existing.recentTaskNames.map((x) => String(x || '').trim()).filter(Boolean)
+    : [];
+  if (taskName) {
+    recentTaskNames = [taskName, ...recentTaskNames.filter((t) => t !== taskName)].slice(0, 8);
+  }
+
+  const robotClientName = String(
+    item.robotClientName || existing?.robotClientName || '',
+  ).trim();
+  const robotClientUuid = String(
+    item.robotClientUuid || existing?.robotClientUuid || '',
+  ).trim();
+
   const next = {
     fingerprint: item.fingerprint,
     errorSignature: item.errorSignature || existing?.errorSignature || null,
     robotUuid: item.robotUuid || existing?.robotUuid || '',
     robotName: item.robotName || existing?.robotName || '',
+    taskName: taskName || existing?.taskName || '',
+    recentTaskNames,
+    robotClientName,
+    robotClientUuid,
     flowName: item.flowName || existing?.flowName || '',
     lineNumber: item.lineNumber || existing?.lineNumber || '',
     errorType: item.errorType || existing?.errorType || '',
@@ -291,5 +423,8 @@ module.exports = {
   pickJobFailureAt,
   maxIso,
   minIso,
+  loadTaskIndex,
+  upsertTaskNamesFromJobs,
+  getTaskIndexEntry,
 };
 

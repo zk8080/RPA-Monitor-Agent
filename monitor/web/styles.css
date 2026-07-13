@@ -1,27 +1,27 @@
-/* RPA Workbench — elevated atelier layout (product register) */
+/* RPA Workbench — calm slate tool (product register, restrained) */
 :root {
-  /* Canvas */
-  --bg: #f3f1ec;
-  --bg-elevated: #faf9f7;
+  /* Canvas — cool near-white, not warm paper */
+  --bg: #f4f5f7;
+  --bg-elevated: #fafbfc;
   --surface: #ffffff;
-  --surface-2: #f4f2ed;
-  --surface-inset: #eeece7;
+  --surface-2: #f1f3f5;
+  --surface-inset: #eef0f3;
 
   /* Lines */
-  --border: rgba(28, 25, 23, 0.08);
-  --border-strong: rgba(28, 25, 23, 0.14);
-  --border-hover: rgba(28, 25, 23, 0.22);
+  --border: rgba(15, 23, 42, 0.08);
+  --border-strong: rgba(15, 23, 42, 0.12);
+  --border-hover: rgba(15, 23, 42, 0.2);
 
-  /* Ink */
-  --text: #1c1917;
-  --text-2: #57534e;
-  --text-3: #78716c;
+  /* Ink — slate scale */
+  --text: #0f172a;
+  --text-2: #475569;
+  --text-3: #64748b;
 
-  /* Accent — restrained indigo, not neon */
-  --accent: #4338ca;
-  --accent-hover: #3730a3;
-  --accent-soft: rgba(67, 56, 202, 0.08);
-  --accent-ring: rgba(67, 56, 202, 0.22);
+  /* Accent — ink blue, sparse (primary / selection / focus only) */
+  --accent: #1d4ed8;
+  --accent-hover: #1e40af;
+  --accent-soft: rgba(29, 78, 216, 0.08);
+  --accent-ring: rgba(29, 78, 216, 0.22);
 
   /* Semantic */
   --ok: #047857;
@@ -31,23 +31,32 @@
   --danger: #b91c1c;
   --danger-bg: #fef2f2;
 
-  /* Sidebar (charcoal, not neon black) */
-  --rail: #171412;
-  --rail-2: #1f1b18;
-  --rail-text: #e7e5e4;
-  --rail-muted: #a8a29e;
-  --rail-faint: #78716c;
+  /* Sidebar — cool slate, flat (no purple wash) */
+  --rail: #0f172a;
+  --rail-2: #111827;
+  --rail-text: #e2e8f0;
+  --rail-muted: #94a3b8;
+  --rail-faint: #64748b;
   --rail-hover: rgba(255, 255, 255, 0.05);
-  --rail-active: rgba(255, 255, 255, 0.08);
-  --rail-border: rgba(255, 255, 255, 0.06);
+  --rail-active: rgba(255, 255, 255, 0.09);
+  --rail-border: rgba(148, 163, 184, 0.12);
 
-  --radius: 12px;
-  --radius-sm: 8px;
-  --radius-xs: 6px;
-  --shadow: 0 1px 2px rgba(28, 25, 23, 0.04), 0 8px 24px rgba(28, 25, 23, 0.04);
-  --shadow-toast: 0 12px 40px rgba(28, 25, 23, 0.18);
-  --font: "IBM Plex Sans", "Segoe UI", system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
-  --mono: "IBM Plex Mono", "Cascadia Code", "SF Mono", Consolas, ui-monospace, monospace;
+  /*
+   * Radius scale — differentiate by role, not one pill everywhere:
+   *   card/surface  6px  ·  control (btn/input/tab) 6px  ·  tag/badge 4px
+   *   soft shell (search/toast) 8px  ·  circle only for dots/step index
+   */
+  --radius: 6px;
+  --radius-sm: 4px;
+  --radius-control: 6px;
+  --radius-soft: 8px;
+  --radius-xs: 4px;
+  /* Quiet elevation: one soft shadow, no purple glow */
+  --shadow: 0 1px 2px rgba(15, 23, 42, 0.04), 0 4px 12px rgba(15, 23, 42, 0.04);
+  --shadow-toast: 0 8px 28px rgba(15, 23, 42, 0.16);
+  /* Product UI: system stack — crisp on Windows/macOS, no Google Fonts dependency */
+  --font: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+  --mono: ui-monospace, "Cascadia Code", "Cascadia Mono", "SF Mono", Consolas, "Segoe UI Mono", monospace;
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
@@ -114,9 +123,7 @@ summary:focus-visible {
   flex-direction: column;
   gap: var(--space-6);
   padding: 28px 18px 20px;
-  background:
-    radial-gradient(800px 400px at 0% 0%, rgba(67, 56, 202, 0.12), transparent 55%),
-    linear-gradient(180deg, var(--rail-2), var(--rail));
+  background: var(--rail);
   border-right: 1px solid var(--rail-border);
   position: sticky;
   top: 0;
@@ -133,10 +140,9 @@ summary:focus-visible {
 .brand-mark {
   width: 32px;
   height: 32px;
-  border-radius: 9px;
-  background:
-    linear-gradient(145deg, #6366f1 0%, #4338ca 55%, #312e81 100%);
-  box-shadow: 0 0 0 1px rgba(255,255,255,0.08), 0 8px 20px rgba(67, 56, 202, 0.25);
+  border-radius: var(--radius-control);
+  background: #1d4ed8;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.1);
   position: relative;
   flex-shrink: 0;
 }
@@ -184,7 +190,7 @@ summary:focus-visible {
   align-items: center;
   gap: 10px;
   padding: 10px 12px;
-  border-radius: 10px;
+  border-radius: var(--radius-control);
   color: var(--rail-muted);
   text-decoration: none;
   font-weight: 500;
@@ -212,14 +218,14 @@ summary:focus-visible {
 }
 .nav-link.active .nav-dot {
   opacity: 1;
-  background: #a5b4fc;
-  box-shadow: 0 0 0 3px rgba(165, 180, 252, 0.18);
+  background: #93c5fd;
+  box-shadow: 0 0 0 3px rgba(147, 197, 253, 0.2);
 }
 
 .sidebar-bottom {
   padding: 14px;
-  border-radius: 12px;
-  background: rgba(0, 0, 0, 0.22);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.04);
   border: 1px solid var(--rail-border);
   display: flex;
   flex-direction: column;
@@ -289,7 +295,7 @@ summary:focus-visible {
   text-align: left;
 }
 .sidebar-link:hover,
-.sidebar-link-btn:hover { color: #c7d2fe; }
+.sidebar-link-btn:hover { color: #bfdbfe; }
 
 /* ── Main ── */
 .main {
@@ -297,9 +303,7 @@ summary:focus-visible {
   display: flex;
   flex-direction: column;
   min-height: 100vh;
-  background:
-    radial-gradient(900px 420px at 100% 0%, rgba(67, 56, 202, 0.05), transparent 50%),
-    var(--bg);
+  background: var(--bg);
 }
 
 .header {
@@ -412,7 +416,7 @@ kbd {
   border: 1px solid var(--border-strong);
   background: var(--surface);
   color: var(--text);
-  border-radius: 999px;
+  border-radius: var(--radius-control);
   padding: 8px 14px;
   font-size: 13px;
   font-weight: 500;
@@ -427,7 +431,7 @@ kbd {
   background: var(--accent);
   border-color: transparent;
   color: #fff;
-  box-shadow: 0 1px 2px rgba(67, 56, 202, 0.25), 0 6px 16px rgba(67, 56, 202, 0.18);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.12);
 }
 .btn.primary:hover {
   background: var(--accent-hover);
@@ -439,11 +443,11 @@ kbd {
   box-shadow: none;
   color: var(--text-2);
 }
-.btn.ghost:hover { background: rgba(28, 25, 23, 0.05); color: var(--text); }
+.btn.ghost:hover { background: rgba(15, 23, 42, 0.05); color: var(--text); }
 .btn.sm {
   padding: 5px 10px;
   font-size: 12px;
-  border-radius: 999px;
+  border-radius: var(--radius-control);
 }
 .btn.busy { opacity: 0.7; cursor: wait; }
 .btn.copied {
@@ -542,7 +546,7 @@ kbd {
   flex-wrap: wrap;
   align-items: flex-start;
   justify-content: space-between;
-  gap: var(--space-3) var(--space-4);
+  gap: var(--space-2) var(--space-3);
   padding: 14px 10px;
   margin: 0 -10px;
   border-radius: var(--radius-sm);
@@ -559,7 +563,8 @@ a.list-item:hover .item-title { color: var(--accent); }
 
 .item-main {
   min-width: 0;
-  flex: 1 1 180px;
+  /* 主内容吃满宽度，右侧 meta 不再对半分 */
+  flex: 1 1 0;
 }
 .item-title {
   font-size: 14px;
@@ -589,15 +594,23 @@ a.list-item:hover .item-title { color: var(--accent); }
   font-family: var(--font);
   color: var(--text-2);
   line-height: 1.45;
+  /* 备注/错误原因可用更宽行，少换行 */
+  max-width: none;
 }
 .item-side {
   display: flex;
-  flex-direction: column;
-  align-items: flex-end;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
   gap: 8px;
-  flex: 1 1 220px;
+  /* 只占内容宽度：badge + 详情，不拉成半栏 */
+  flex: 0 0 auto;
   min-width: 0;
   max-width: 100%;
+}
+.item-side .badges {
+  justify-content: flex-end;
 }
 .item-actions {
   display: flex;
@@ -630,8 +643,8 @@ a.list-item:hover .item-go,
   display: inline-flex;
   align-items: center;
   max-width: 100%;
-  padding: 6px 12px;
-  border-radius: 999px;
+  padding: 5px 10px;
+  border-radius: var(--radius-control);
   border: 1px solid var(--border);
   background: var(--surface-2);
   color: var(--text);
@@ -642,7 +655,7 @@ a.list-item:hover .item-go,
 }
 .chip:hover {
   background: var(--accent-soft);
-  border-color: rgba(67, 56, 202, 0.22);
+  border-color: rgba(29, 78, 216, 0.22);
   color: var(--accent);
   text-decoration: none;
 }
@@ -650,25 +663,18 @@ a.list-item:hover .item-go,
 /* Agent handoff strip — primary path affordance */
 .handoff {
   display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-4);
-  align-items: flex-start;
-  justify-content: space-between;
+  flex-direction: column;
+  gap: 8px;
   padding: 16px 18px;
   margin: 0 0 var(--space-4);
   background: var(--surface);
-  border: 1px solid rgba(67, 56, 202, 0.16);
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius);
   box-shadow: var(--shadow);
-  background-image: linear-gradient(135deg, rgba(67, 56, 202, 0.05), transparent 55%);
 }
 .handoff.compact {
   padding: 12px 16px;
   margin-bottom: var(--space-4);
-}
-.handoff-main {
-  min-width: 0;
-  flex: 1 1 240px;
 }
 .handoff-label {
   font-size: 11px;
@@ -676,11 +682,20 @@ a.list-item:hover .item-go,
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--accent);
-  margin-bottom: 8px;
+  margin: 0;
+}
+/* 路径小卡片 + 打开按钮同一行垂直居中 */
+.handoff-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
 }
 .handoff-path {
   display: block;
-  width: 100%;
+  flex: 1 1 200px;
+  min-width: 0;
   text-align: left;
   appearance: none;
   border: 1px solid var(--border);
@@ -696,7 +711,7 @@ a.list-item:hover .item-go,
   transition: border-color 0.12s var(--ease), background 0.12s var(--ease), color 0.12s var(--ease);
 }
 .handoff-path:hover {
-  border-color: rgba(67, 56, 202, 0.35);
+  border-color: rgba(29, 78, 216, 0.35);
   color: var(--text);
   background: #fff;
 }
@@ -722,19 +737,19 @@ a.list-item:hover .item-go,
   position: relative;
   display: inline-flex;
   align-items: stretch;
-  border-radius: 999px;
-  box-shadow: 0 1px 2px rgba(67, 56, 202, 0.25), 0 6px 16px rgba(67, 56, 202, 0.18);
+  border-radius: var(--radius-control);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.12);
 }
 .split-btn .btn.primary {
   box-shadow: none;
 }
 .split-btn .split-main {
-  border-radius: 999px 0 0 999px;
+  border-radius: var(--radius-control) 0 0 var(--radius-control);
   border-right: 0;
   padding-right: 12px;
 }
 .split-btn .split-caret {
-  border-radius: 0 999px 999px 0;
+  border-radius: 0 var(--radius-control) var(--radius-control) 0;
   border-left: 1px solid rgba(255, 255, 255, 0.22);
   padding-left: 10px;
   padding-right: 12px;
@@ -766,7 +781,7 @@ a.list-item:hover .item-go,
   background: transparent;
   text-align: left;
   padding: 8px 10px;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
   font: inherit;
   color: var(--text);
@@ -794,8 +809,8 @@ a.list-item:hover .item-go,
   align-items: center;
   font-size: 11px;
   font-weight: 600;
-  padding: 3px 8px;
-  border-radius: 999px;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
   background: var(--surface-2);
   color: var(--text-2);
   font-variant-numeric: tabular-nums;
@@ -824,17 +839,17 @@ a.list-item:hover .item-go,
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  padding: 0 16px;
-  height: 48px;
+  padding: 0 14px;
+  height: 44px;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: var(--radius-soft);
   margin-bottom: var(--space-4);
   box-shadow: var(--shadow);
   transition: border-color 0.15s var(--ease), box-shadow 0.15s var(--ease);
 }
 .search:focus-within {
-  border-color: rgba(67, 56, 202, 0.35);
+  border-color: rgba(29, 78, 216, 0.35);
   box-shadow: var(--focus), var(--shadow);
 }
 .search::before {
@@ -899,13 +914,13 @@ a.list-item:hover .item-go,
 
 .tabs {
   display: flex;
-  gap: 4px;
-  padding: 4px;
+  gap: 2px;
+  padding: 3px;
   margin: var(--space-5) 0 var(--space-4);
   width: fit-content;
   max-width: 100%;
-  border-radius: 999px;
-  background: rgba(28, 25, 23, 0.05);
+  border-radius: var(--radius-soft);
+  background: rgba(15, 23, 42, 0.05);
   border: 1px solid var(--border);
 }
 .tab {
@@ -913,8 +928,8 @@ a.list-item:hover .item-go,
   border: 0;
   background: transparent;
   color: var(--text-2);
-  padding: 8px 16px;
-  border-radius: 999px;
+  padding: 7px 14px;
+  border-radius: var(--radius-control);
   cursor: pointer;
   font-weight: 500;
   font-size: 13px;
@@ -976,7 +991,6 @@ a.list-item:hover .item-go,
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background:
-    radial-gradient(circle at 20% 0%, rgba(67, 56, 202, 0.04), transparent 45%),
     var(--bg-elevated);
   padding: var(--space-5);
   overflow: auto;
@@ -1249,10 +1263,10 @@ body.graph-fs-open {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
+  width: 22px;
+  height: 22px;
   margin-top: 1px;
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   background: var(--surface-2);
   border: 1px solid var(--border);
   font-size: 11px;
@@ -1481,11 +1495,11 @@ details.fold[open] > summary::before { content: "▾ "; }
 
 .guidance-panel {
   margin-bottom: var(--space-4);
-  border-color: rgba(67, 56, 202, 0.16);
-  background: linear-gradient(180deg, rgba(67, 56, 202, 0.04), var(--surface));
+  border-color: var(--border-strong);
+  background: var(--surface);
 }
 .guidance-panel .plain-list li {
-  border-bottom-color: rgba(28, 25, 23, 0.06);
+  border-bottom-color: var(--border);
 }
 
 /* 日报 Markdown */
@@ -1575,13 +1589,13 @@ details.fold[open] > summary::before { content: "▾ "; }
   justify-content: space-between;
   padding: 16px 18px;
   margin-bottom: var(--space-5);
-  background: linear-gradient(135deg, rgba(67, 56, 202, 0.07), rgba(67, 56, 202, 0.02));
-  border: 1px solid rgba(67, 56, 202, 0.14);
+  background: var(--accent-soft);
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius);
   font-size: 13px;
   color: var(--text-2);
   line-height: 1.5;
-  box-shadow: var(--shadow);
+  box-shadow: none;
 }
 .tip p { margin: 0; max-width: 68ch; }
 .tip strong { color: var(--text); font-weight: 600; }
@@ -1593,7 +1607,7 @@ details.fold[open] > summary::before { content: "▾ "; }
   bottom: 24px;
   max-width: 360px;
   padding: 12px 16px;
-  border-radius: 12px;
+  border-radius: var(--radius-soft);
   background: var(--rail);
   color: #fafaf9;
   font-size: 13px;
@@ -1647,7 +1661,7 @@ details.fold[open] > summary::before { content: "▾ "; }
 .field-lock { margin-left: 8px; font-weight: 500; color: var(--warn); font-size: 11px; }
 .field-input {
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-control);
   padding: 10px 12px;
   background: var(--surface);
   color: var(--text);
@@ -1655,7 +1669,7 @@ details.fold[open] > summary::before { content: "▾ "; }
   transition: border-color 0.15s var(--ease), box-shadow 0.15s var(--ease);
 }
 .field-input:focus {
-  border-color: rgba(67, 56, 202, 0.4);
+  border-color: rgba(29, 78, 216, 0.4);
   box-shadow: var(--focus);
 }
 .field-input[readonly], .field-input:disabled {

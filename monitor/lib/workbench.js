@@ -50,7 +50,10 @@ function listOpenAgents(cfg) {
 /**
  * queue → 按 robotUuid 聚合
  * @param {object[]} items
- * @returns {Map<string, { robotUuid, robotName, failureCount, undiagnosedCount, lastSeen, items }>}
+ * @returns {Map<string, {
+ *   robotUuid, robotName, taskName, taskNames,
+ *   failureCount, undiagnosedCount, lastSeen, items
+ * }>}
  */
 /** 展示用失败时间：优先 lastFailureAt（真实失败），兼容旧 queue 仅 lastSeen */
 function failureTimeOf(it) {
@@ -67,6 +70,10 @@ function aggregateFailuresByRobot(items) {
       row = {
         robotUuid: id,
         robotName: it.robotName || '',
+        taskName: it.taskName || '',
+        taskNames: [],
+        robotClientName: it.robotClientName || '',
+        robotClientUuid: it.robotClientUuid || '',
         failureCount: 0,
         undiagnosedCount: 0,
         lastSeen: null,
@@ -77,9 +84,34 @@ function aggregateFailuresByRobot(items) {
     row.failureCount += 1;
     if (!it.diagnosed) row.undiagnosedCount += 1;
     if (!row.robotName && it.robotName) row.robotName = it.robotName;
+    if (!row.robotClientName && it.robotClientName) {
+      row.robotClientName = String(it.robotClientName).trim();
+    }
+    if (!row.robotClientUuid && it.robotClientUuid) {
+      row.robotClientUuid = String(it.robotClientUuid).trim();
+    }
+
+    // 合并调度任务名（taskName ≠ robotName / 应用名）
+    const namesFromItem = [];
+    if (it.taskName) namesFromItem.push(String(it.taskName).trim());
+    if (Array.isArray(it.recentTaskNames)) {
+      for (const t of it.recentTaskNames) {
+        if (t) namesFromItem.push(String(t).trim());
+      }
+    }
+    for (const t of namesFromItem) {
+      if (!t) continue;
+      if (!row.taskNames.includes(t)) row.taskNames.push(t);
+      if (!row.taskName) row.taskName = t;
+    }
+
     const ft = failureTimeOf(it);
     if (ft && (!row.lastSeen || String(ft) > String(row.lastSeen || ''))) {
       row.lastSeen = ft;
+      // 最近失败条目上的 taskName / 客户端优先
+      if (it.taskName) row.taskName = String(it.taskName).trim();
+      if (it.robotClientName) row.robotClientName = String(it.robotClientName).trim();
+      if (it.robotClientUuid) row.robotClientUuid = String(it.robotClientUuid).trim();
     }
     row.items.push(it);
   }
@@ -118,15 +150,26 @@ function buildOverview(cfg, state = {}) {
   const undiagnosed = queueItems.filter((q) => !q.diagnosed).length;
 
   const localByUuid = new Map((scan.apps || []).map((a) => [a.robotUuid, a]));
+  const taskIndex = memory.loadTaskIndex(cfg.dataDir);
+  const byRobotTask = (taskIndex && taskIndex.byRobot) || {};
+
   const problemApps = [...queueStats.values()]
     .filter((r) => r.robotUuid && r.robotUuid !== 'unknown')
     .sort((a, b) => String(b.lastSeen || '').localeCompare(String(a.lastSeen || '')))
     .slice(0, 10)
     .map((r) => {
       const local = localByUuid.get(r.robotUuid);
+      const taskEntry = byRobotTask[r.robotUuid];
+      const appName =
+        (local && local.name) || r.robotName || (taskEntry && taskEntry.robotName) || r.robotUuid;
+      const merged = mergeTaskNames(r, taskEntry, null);
       return {
         robotUuid: r.robotUuid,
-        robotName: r.robotName || (local && local.name) || r.robotUuid,
+        /** 应用名（package / robotName） */
+        robotName: appName,
+        /** 调度任务名（优先列表主标题） */
+        taskName: merged.taskName || '',
+        taskNames: merged.taskNames || [],
         failureCount: r.failureCount,
         undiagnosedCount: r.undiagnosedCount,
         lastSeen: r.lastSeen,
@@ -170,36 +213,194 @@ function buildOverview(cfg, state = {}) {
       totalCount: g.totalCount,
       lastSeen: g.lastSeen,
       sampleFingerprint: g.sampleFingerprint,
-      affectedApps: g.affectedApps.map((a) => ({
-        robotUuid: a.robotUuid,
-        robotName: a.robotName,
-        count: a.count,
-        sampleFingerprint: a.fingerprints[0] || '',
-      })),
+      affectedApps: g.affectedApps.map((a) => {
+        const te = byRobotTask[a.robotUuid];
+        const st = queueStats.get(a.robotUuid);
+        const merged = mergeTaskNames(st, te, null);
+        const appName = a.robotName || (te && te.robotName) || a.robotUuid;
+        return {
+          robotUuid: a.robotUuid,
+          robotName: appName,
+          taskName: merged.taskName || '',
+          count: a.count,
+          sampleFingerprint: a.fingerprints[0] || '',
+        };
+      }),
     })),
+  };
+}
+
+/**
+ * 从 queue 聚合行取最近失败条目 + 任务名列表
+ * @param {object|null|undefined} st
+ */
+function lastFailureFromStats(st) {
+  if (!st || !Array.isArray(st.items) || !st.items.length) return null;
+  return st.items
+    .slice()
+    .sort((x, y) =>
+      String(failureTimeOf(y) || '').localeCompare(String(failureTimeOf(x) || '')),
+    )[0];
+}
+
+/**
+ * 合并任务名：task-index（含成功 job）优先，queue 失败条目补充
+ * @param {object|null|undefined} st
+ * @param {object|null|undefined} taskEntry memory task-index 行
+ * @param {object|null|undefined} lastItem
+ */
+function mergeTaskNames(st, taskEntry, lastItem) {
+  const taskNames = [];
+  const push = (t) => {
+    const s = String(t || '').trim();
+    if (s && !taskNames.includes(s)) taskNames.push(s);
+  };
+  // 1) 全量 job 索引（成功也有）
+  if (taskEntry) {
+    push(taskEntry.taskName);
+    if (Array.isArray(taskEntry.taskNames)) taskEntry.taskNames.forEach(push);
+  }
+  // 2) 失败 queue 聚合
+  if (st) {
+    push(st.taskName);
+    if (Array.isArray(st.taskNames)) st.taskNames.forEach(push);
+  }
+  if (lastItem) push(lastItem.taskName);
+
+  const taskName =
+    (taskEntry && taskEntry.taskName) ||
+    (st && st.taskName) ||
+    (lastItem && lastItem.taskName) ||
+    taskNames[0] ||
+    '';
+  return { taskName, taskNames };
+}
+
+/**
+ * @param {object} base 本地扫描或 queue/索引 补全的基础字段
+ * @param {object|null|undefined} st queue 聚合
+ * @param {object|null|undefined} taskEntry task-index 行
+ */
+function buildAppListRow(base, st, taskEntry) {
+  const lastItem = lastFailureFromStats(st);
+  const appName =
+    (base && base.name) ||
+    (st && st.robotName) ||
+    (taskEntry && taskEntry.robotName) ||
+    (base && base.robotUuid) ||
+    (st && st.robotUuid) ||
+    (taskEntry && taskEntry.robotUuid) ||
+    '';
+  const { taskName, taskNames } = mergeTaskNames(st, taskEntry, lastItem);
+  const robotClientName =
+    (taskEntry && taskEntry.robotClientName) ||
+    (st && st.robotClientName) ||
+    (lastItem && lastItem.robotClientName) ||
+    '';
+  const robotClientUuid =
+    (taskEntry && taskEntry.robotClientUuid) ||
+    (st && st.robotClientUuid) ||
+    (lastItem && lastItem.robotClientUuid) ||
+    '';
+
+  return {
+    robotUuid:
+      (base && base.robotUuid) ||
+      (st && st.robotUuid) ||
+      (taskEntry && taskEntry.robotUuid) ||
+      '',
+    name: appName,
+    /** 影刀 job.taskName：调度任务名（列表主展示；可来自成功 job） */
+    taskName: taskName || '',
+    taskNames,
+    /** 影刀 job.robotClientName：运行客户端 / 机器人 */
+    robotClientName: robotClientName || '',
+    robotClientUuid: robotClientUuid || '',
+    description: (base && base.description) || '',
+    version: (base && base.version) || '',
+    startup: (base && base.startup) || '',
+    robotType: (base && base.robotType) || '',
+    flowCount: base && base.flowCount != null ? base.flowCount : 0,
+    packageMtime: (base && base.packageMtime) || null,
+    userId: (base && base.userId) || null,
+    xbotDir: (base && base.xbotDir) || null,
+    /** 仅云端有（本机未安装） */
+    remoteOnly: !(base && base.xbotDir),
+    failureCount: st ? st.failureCount : 0,
+    undiagnosedCount: st ? st.undiagnosedCount : 0,
+    lastFailureAt: st ? st.lastSeen : null,
+    lastErrorType: lastItem ? lastItem.errorType || '' : '',
+    lastFlowName: lastItem ? lastItem.flowName || '' : '',
   };
 }
 
 function listAppsWithStats(cfg) {
   const bundle = getAppsBundle(cfg);
   const { scan, queueStats } = bundle;
+  const taskIndex = memory.loadTaskIndex(cfg.dataDir);
+  const byRobotTask = (taskIndex && taskIndex.byRobot) || {};
+  const seen = new Set();
+  const apps = [];
 
-  const apps = scan.apps.map((a) => {
-    const st = queueStats.get(a.robotUuid);
-    return {
-      robotUuid: a.robotUuid,
-      name: a.name || (st && st.robotName) || a.robotUuid,
-      userId: a.userId,
-      xbotDir: a.xbotDir,
-      failureCount: st ? st.failureCount : 0,
-      undiagnosedCount: st ? st.undiagnosedCount : 0,
-      lastFailureAt: st ? st.lastSeen : null,
-    };
-  });
+  // 1) 本机已安装应用（任务名来自 task-index + 失败 queue）
+  for (const a of scan.apps || []) {
+    seen.add(a.robotUuid);
+    apps.push(buildAppListRow(a, queueStats.get(a.robotUuid), byRobotTask[a.robotUuid]));
+  }
+
+  // 2) queue 失败应用（本机未安装）
+  for (const [robotUuid, st] of queueStats.entries()) {
+    if (!robotUuid || seen.has(robotUuid)) continue;
+    seen.add(robotUuid);
+    apps.push(
+      buildAppListRow(
+        {
+          robotUuid,
+          name: st.robotName || robotUuid,
+          description: '',
+          version: '',
+          startup: '',
+          robotType: '',
+          flowCount: 0,
+          packageMtime: null,
+          userId: null,
+          xbotDir: null,
+        },
+        st,
+        byRobotTask[robotUuid],
+      ),
+    );
+  }
+
+  // 3) 仅在 task-index 出现（近期有运行、未必失败、本机也可能未装）
+  for (const [robotUuid, te] of Object.entries(byRobotTask)) {
+    if (!robotUuid || seen.has(robotUuid)) continue;
+    seen.add(robotUuid);
+    apps.push(
+      buildAppListRow(
+        {
+          robotUuid,
+          name: (te && te.robotName) || robotUuid,
+          description: '',
+          version: '',
+          startup: '',
+          robotType: '',
+          flowCount: 0,
+          packageMtime: null,
+          userId: null,
+          xbotDir: null,
+        },
+        queueStats.get(robotUuid),
+        te,
+      ),
+    );
+  }
 
   apps.sort((a, b) => {
     if (b.failureCount !== a.failureCount) return b.failureCount - a.failureCount;
-    return String(a.name || '').localeCompare(String(b.name || ''), 'zh');
+    const an = a.taskName || a.name || '';
+    const bn = b.taskName || b.name || '';
+    return String(an).localeCompare(String(bn), 'zh');
   });
 
   return {
@@ -207,6 +408,7 @@ function listAppsWithStats(cfg) {
     usersRoot: scan.usersRoot,
     userCount: scan.userCount,
     count: apps.length,
+    localCount: (scan.apps || []).length,
     apps,
   };
 }
@@ -248,10 +450,33 @@ function getAppDetail(robotUuid, cfg, opts = {}) {
       appliedAt: p.appliedAt || null,
     }));
 
+  const taskEntry = memory.getTaskIndexEntry(cfg.dataDir, robotUuid);
+  const appName =
+    (local && local.name) ||
+    resolved.name ||
+    (st && st.robotName) ||
+    (taskEntry && taskEntry.robotName) ||
+    robotUuid;
+  const mergedTasks = mergeTaskNames(st, taskEntry, null);
+  const taskNames = mergedTasks.taskNames;
+  const taskName = mergedTasks.taskName;
+  const robotClientName =
+    (taskEntry && taskEntry.robotClientName) ||
+    (st && st.robotClientName) ||
+    '';
+  const robotClientUuid =
+    (taskEntry && taskEntry.robotClientUuid) ||
+    (st && st.robotClientUuid) ||
+    '';
+
   return {
     ok: true,
     robotUuid,
-    name: (local && local.name) || resolved.name || (st && st.robotName) || robotUuid,
+    name: appName,
+    taskName,
+    taskNames,
+    robotClientName,
+    robotClientUuid,
     userId: (local && local.userId) || null,
     xbotDir: resolved.xbotDir || (local && local.xbotDir) || null,
     resolve: {

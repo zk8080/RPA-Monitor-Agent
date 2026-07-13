@@ -218,6 +218,55 @@ function resolveXbotDir(robotUuid, opts = {}) {
 }
 
 /**
+ * 从 xbot_robot/package.json 读取列表可用的元信息（名称、描述、流程数等）
+ * @param {string} xbotDir
+ * @returns {{
+ *   name: string,
+ *   description: string,
+ *   version: string,
+ *   startup: string,
+ *   robotType: string,
+ *   flowCount: number,
+ *   packageMtime: string|null,
+ * }}
+ */
+function readPackageMeta(xbotDir) {
+  const empty = {
+    name: '',
+    description: '',
+    version: '',
+    startup: '',
+    robotType: '',
+    flowCount: 0,
+    packageMtime: null,
+  };
+  if (!xbotDir) return empty;
+  const pkgPath = path.join(xbotDir, 'package.json');
+  try {
+    const raw = fs.readFileSync(pkgPath, 'utf8');
+    const pkg = JSON.parse(raw);
+    let packageMtime = null;
+    try {
+      packageMtime = fs.statSync(pkgPath).mtime.toISOString();
+    } catch {
+      // ignore
+    }
+    const flows = Array.isArray(pkg.flows) ? pkg.flows : [];
+    return {
+      name: pkg.name != null ? String(pkg.name) : '',
+      description: pkg.description != null ? String(pkg.description).trim() : '',
+      version: pkg.version != null ? String(pkg.version) : '',
+      startup: pkg.startup != null ? String(pkg.startup) : '',
+      robotType: pkg.robot_type != null ? String(pkg.robot_type) : '',
+      flowCount: flows.length,
+      packageMtime,
+    };
+  } catch {
+    return empty;
+  }
+}
+
+/**
  * 扫描本机 apps 目录，生成 app-map 草稿（不覆盖已有手工项时可合并）
  */
 function scanLocalApps(cfg = {}) {
@@ -232,16 +281,16 @@ function scanLocalApps(cfg = {}) {
       const robotUuid = ent.name;
       const xbotDir = xbotDirUnderUser(home, robotUuid);
       if (!xbotDir) continue;
-      let name = '';
-      try {
-        const pkg = JSON.parse(fs.readFileSync(path.join(xbotDir, 'package.json'), 'utf8'));
-        name = pkg.name || '';
-      } catch {
-        // ignore
-      }
+      const meta = readPackageMeta(xbotDir);
       apps.push({
         robotUuid,
-        name,
+        name: meta.name,
+        description: meta.description,
+        version: meta.version,
+        startup: meta.startup,
+        robotType: meta.robotType,
+        flowCount: meta.flowCount,
+        packageMtime: meta.packageMtime,
         xbotDir,
         userId: path.basename(home),
         userHome: home,
@@ -549,6 +598,7 @@ module.exports = {
   discoverXbotDir,
   resolveXbotDir,
   scanLocalApps,
+  readPackageMeta,
   understandFlow,
   loadFlowBlocks,
   inspectProject,

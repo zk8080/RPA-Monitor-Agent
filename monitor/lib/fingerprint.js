@@ -203,6 +203,9 @@ function makeErrorSignature(parts) {
  * @param {{
  *   robotUuid?: string,
  *   robotName?: string,
+ *   taskName?: string,
+ *   robotClientName?: string,
+ *   robotClientUuid?: string,
  *   remark?: string,
  *   logs?: any[],
  *   jobUuid?: string,
@@ -212,6 +215,9 @@ function makeErrorSignature(parts) {
  *   errorSignature: string,
  *   robotUuid: string,
  *   robotName: string,
+ *   taskName: string,
+ *   robotClientName: string,
+ *   robotClientUuid: string,
  *   flowName: string,
  *   lineNumber: string,
  *   errorType: string,
@@ -236,12 +242,21 @@ function buildFingerprint(input = {}) {
 
   const robotUuid = input.robotUuid || '';
   const parts = { robotUuid, flowName, errorType, elementName, rawRemark };
+  // 影刀 job：taskName=调度任务名，robotName=应用名（常不同）
+  const taskName = input.taskName != null ? String(input.taskName).trim() : '';
+  const robotClientName =
+    input.robotClientName != null ? String(input.robotClientName).trim() : '';
+  const robotClientUuid =
+    input.robotClientUuid != null ? String(input.robotClientUuid).trim() : '';
 
   return {
     fingerprint: makeFingerprintKey(parts),
     errorSignature: makeErrorSignature(parts),
     robotUuid,
     robotName: input.robotName || '',
+    taskName,
+    robotClientName,
+    robotClientUuid,
     // flowName 保持真实解析结果（可为空）；指纹前缀可能用「调度层」
     flowName,
     lineNumber,

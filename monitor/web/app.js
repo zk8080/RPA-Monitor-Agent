@@ -434,8 +434,8 @@
         ? openAgentMenuHtml({ robotUuid, xbotDir: path, agents, prompt })
         : '';
     return `<div class="handoff ${compact ? 'compact' : ''}" role="region" aria-label="交给 Coding Agent">
-      <div class="handoff-main">
-        <div class="handoff-label">${esc(pathLabel)}</div>
+      <div class="handoff-label">${esc(pathLabel)}</div>
+      <div class="handoff-row">
         ${
           path
             ? `<button type="button" class="handoff-path" data-copy="${esc(path)}" data-copy-msg="路径已复制" title="点击复制路径">${esc(
@@ -443,8 +443,8 @@
               )}</button>`
             : `<div class="handoff-path muted">未解析到 xbot_robot 路径</div>`
         }
+        ${openMenu ? `<div class="handoff-actions">${openMenu}</div>` : ''}
       </div>
-      ${openMenu ? `<div class="handoff-actions">${openMenu}</div>` : ''}
     </div>`;
   }
 
@@ -593,11 +593,9 @@
   }
 
   /**
-   * 失败列表侧栏：状态 + 进详情（操作只在详情页）
+   * 失败列表右侧：仅状态 badge（整行是链接，不再单独「详情」按钮）
    */
-  function failureActionsHtml(f) {
-    const fp = f.fingerprint || '';
-    const diag = f.lastDiagnosis;
+  function failureSideHtml(f) {
     const canPreview = f.canPreviewFix === true;
     const fixLabel = f.guidance?.title || f.fixClass || '';
     return `<div class="item-side">
@@ -613,19 +611,21 @@
         }
         ${f.occurrenceCount ? `<span class="badge">${esc(f.occurrenceCount)} 次</span>` : ''}
       </div>
-      ${
-        diag && diag.rootCause
-          ? `<div class="item-sub wrap" style="max-width:220px;text-align:right">${esc(
-              String(diag.rootCause).slice(0, 80),
-            )}</div>`
-          : f.guidance && f.guidance.summary
-            ? `<div class="item-sub wrap" style="max-width:220px;text-align:right">${esc(
-                String(f.guidance.summary).slice(0, 80),
-              )}</div>`
-            : ''
-      }
-      <a class="item-go" href="#/findings/${encodeURIComponent(fp)}">详情 →</a>
     </div>`;
+  }
+
+  /** 失败条目整行可点进详情 */
+  function failureRowHtml(f, opts = {}) {
+    const fp = f.fingerprint || '';
+    const href = `#/findings/${encodeURIComponent(fp)}`;
+    const subExtra = opts.extraSub || '';
+    return `<a class="list-item" href="${href}">
+      <div class="item-main">
+        <div class="item-title mono">${esc(fp)}</div>
+        ${subExtra}
+      </div>
+      ${failureSideHtml(f)}
+    </a>`;
   }
 
   function renderGuidanceBlock(g) {
@@ -1882,7 +1882,13 @@
                 .replace(/\|/g, ' · ') ||
               '跨应用同类失败';
             const apps = (g.affectedApps || [])
-              .map((a) => esc(a.robotName || a.robotUuid))
+              .map((a) => {
+                const task = String(a.taskName || '').trim();
+                const app = String(a.robotName || a.robotUuid || '').trim();
+                if (task && app && task !== app) return `${task}（${app}）`;
+                return task || app;
+              })
+              .map((s) => esc(s))
               .join('、');
             const sampleHref = g.sampleFingerprint
               ? `#/findings/${encodeURIComponent(g.sampleFingerprint)}`
@@ -1891,7 +1897,7 @@
               ? `<a class="list-item" href="${sampleHref}">
               <div class="item-main">
                 <div class="item-title">${esc(title)}</div>
-                <div class="item-sub wrap">${esc(g.appCount)} 个应用 · ${esc(apps)}</div>
+                <div class="item-sub wrap">${esc(g.appCount)} 个 · ${apps}</div>
               </div>
               <div class="item-side">
                 <div class="badges"><span class="badge danger">${esc(g.totalCount)} 条</span></div>
@@ -1901,7 +1907,7 @@
               : `<div class="list-item">
               <div class="item-main">
                 <div class="item-title">${esc(title)}</div>
-                <div class="item-sub wrap">${esc(g.appCount)} 个应用 · ${esc(apps)}</div>
+                <div class="item-sub wrap">${esc(g.appCount)} 个 · ${apps}</div>
               </div>
               <div class="item-side">
                 <div class="badges"><span class="badge danger">${esc(g.totalCount)} 条</span></div>
@@ -1920,10 +1926,17 @@
             ? `<div class="list">${problems
                 .map((p) => {
                   const href = `#/apps/${encodeURIComponent(p.robotUuid)}`;
+                  const appName = String(p.robotName || p.robotUuid || '').trim();
+                  const taskName = String(p.taskName || '').trim();
+                  const title = taskName || appName;
+                  const appLine =
+                    taskName && appName && taskName !== appName ? `应用 · ${appName}` : '';
+                  const time = p.lastSeen ? relTime(p.lastSeen) : '';
+                  const sub = [appLine, time].filter(Boolean).join(' · ');
                   return `<a class="list-item" href="${href}">
                     <div class="item-main">
-                      <div class="item-title">${esc(p.robotName || p.robotUuid)}</div>
-                      <div class="item-sub">${esc(relTime(p.lastSeen))}</div>
+                      <div class="item-title">${esc(title)}</div>
+                      ${sub ? `<div class="item-sub">${esc(sub)}</div>` : ''}
                     </div>
                     <div class="item-side">
                       <div class="badges">
@@ -1971,7 +1984,7 @@
     const problemCount = apps.filter((a) => a.failureCount > 0).length;
     content.innerHTML = `
       <div class="search">
-        <input type="search" id="app-filter" placeholder="搜索名称、UUID 或路径（按 / 聚焦）" autocomplete="off" aria-label="搜索应用" />
+        <input type="search" id="app-filter" placeholder="搜索应用名、任务名、客户端或 UUID（按 / 聚焦）" autocomplete="off" aria-label="搜索应用" />
         <span class="count" id="app-count">${apps.length} · ${problemCount} 有失败</span>
       </div>
       <div class="panel">
@@ -1983,11 +1996,57 @@
     const filterEl = $('#app-filter');
     const countEl = $('#app-count');
 
+    function appListMeta(a) {
+      const bits = [];
+      if (a.robotClientName) bits.push(String(a.robotClientName));
+      if (a.remoteOnly) bits.push('仅云端');
+      if (a.flowCount > 0) bits.push(`${a.flowCount} 流程`);
+      if (a.version) bits.push(`v${a.version}`);
+      if (a.lastErrorType) bits.push(String(a.lastErrorType));
+      else if (a.lastFlowName && !/^(unknown-flow|no-flow)$/i.test(String(a.lastFlowName))) {
+        bits.push(String(a.lastFlowName));
+      }
+      if (a.lastFailureAt) bits.push(`失败 ${relTime(a.lastFailureAt)}`);
+      else if (a.packageMtime) bits.push(`更新 ${relTime(a.packageMtime)}`);
+      return bits.join(' · ');
+    }
+
+    /**
+     * 列表标题：优先调度任务名；与应用名不同时副标题显示应用名
+     */
+    function appListTitles(a) {
+      const appName = String(a.name || a.robotUuid || '').trim();
+      const task = String(a.taskName || '').trim();
+      const extraTasks = Array.isArray(a.taskNames)
+        ? a.taskNames.map((t) => String(t || '').trim()).filter((t) => t && t !== task && t !== appName)
+        : [];
+      if (task) {
+        return {
+          title: task,
+          appLine: task !== appName ? appName : '',
+          moreTasks: extraTasks.length ? `另 ${extraTasks.length} 个任务` : '',
+        };
+      }
+      return { title: appName, appLine: '', moreTasks: '' };
+    }
+
     function paint(filter = '') {
       const q = filter.trim().toLowerCase();
       const rows = apps.filter((a) => {
         if (!q) return true;
-        return [a.name, a.robotUuid, a.xbotDir, a.userId]
+        const taskBits = [a.taskName, ...(Array.isArray(a.taskNames) ? a.taskNames : [])];
+        return [
+          a.name,
+          a.description,
+          a.robotUuid,
+          a.xbotDir,
+          a.userId,
+          a.robotClientName,
+          a.robotClientUuid,
+          a.lastErrorType,
+          a.lastFlowName,
+          ...taskBits,
+        ]
           .map((x) => String(x || '').toLowerCase())
           .some((s) => s.includes(q));
       });
@@ -2000,7 +2059,7 @@
       if (!rows.length) {
         listEl.innerHTML = empty(
           '没有匹配的应用',
-          q ? '' : '未扫到本机 xbot_robot',
+          q ? '' : '未扫到本机应用，且 queue 暂无失败应用',
         );
         return;
       }
@@ -2008,10 +2067,21 @@
       listEl.innerHTML = rows
         .map((a) => {
           const href = `#/apps/${encodeURIComponent(a.robotUuid)}`;
+          const { title, appLine, moreTasks } = appListTitles(a);
+          const meta = appListMeta(a);
           return `<a class="list-item" href="${href}">
             <div class="item-main">
-              <div class="item-title">${esc(a.name || a.robotUuid)}</div>
-              <div class="item-sub">${esc(shortPath(a.xbotDir, 56))}</div>
+              <div class="item-title">${esc(title)}</div>
+              ${
+                appLine
+                  ? `<div class="item-sub">应用 · ${esc(appLine)}${
+                      moreTasks ? ` · <span class="faint">${esc(moreTasks)}</span>` : ''
+                    }</div>`
+                  : moreTasks
+                    ? `<div class="item-sub faint">${esc(moreTasks)}</div>`
+                    : ''
+              }
+              ${meta ? `<div class="item-sub faint">${esc(meta)}</div>` : ''}
             </div>
             <div class="item-side">
               <div class="badges">
@@ -2025,10 +2095,14 @@
                     ? `<span class="badge warn">${esc(a.undiagnosedCount)} 未诊断</span>`
                     : ''
                 }
+                ${
+                  a.remoteOnly
+                    ? `<span class="badge">云端</span>`
+                    : !a.failureCount && a.flowCount
+                      ? `<span class="badge">${esc(a.flowCount)} 流程</span>`
+                      : ''
+                }
               </div>
-              <div class="faint" style="font-size:11px">${
-                a.lastFailureAt ? esc(relTime(a.lastFailureAt)) : ''
-              }</div>
               <span class="item-go">打开 →</span>
             </div>
           </a>`;
@@ -2144,11 +2218,28 @@
   function renderAppOverview(tabBody, detail, robotUuid) {
     const fails = detail.failures || [];
     tabBody.innerHTML = `
-      <div class="grid-2">
+      <div class="stack">
         <div class="panel">
           <h2>信息</h2>
           <div class="kv">
-            <div class="k">名称</div><div class="v">${esc(detail.name)}</div>
+            <div class="k">应用</div><div class="v">${esc(detail.name)}</div>
+            ${
+              detail.taskName && String(detail.taskName).trim() !== String(detail.name || '').trim()
+                ? `<div class="k">任务</div><div class="v">${esc(detail.taskName)}</div>`
+                : ''
+            }
+            ${
+              Array.isArray(detail.taskNames) && detail.taskNames.length > 1
+                ? `<div class="k">相关任务</div><div class="v">${esc(
+                    detail.taskNames.slice(0, 6).join('、'),
+                  )}${detail.taskNames.length > 6 ? '…' : ''}</div>`
+                : ''
+            }
+            ${
+              detail.robotClientName
+                ? `<div class="k">客户端</div><div class="v">${esc(detail.robotClientName)}</div>`
+                : ''
+            }
             <div class="k">UUID</div><div class="v mono">${esc(detail.robotUuid)}</div>
             <div class="k">账号</div><div class="v mono">${esc(detail.userId || '—')}</div>
             <div class="k">来源</div><div class="v mono">${esc(detail.resolve?.source || '')} ${esc(
@@ -2163,16 +2254,12 @@
             fails.length
               ? `<div class="list">${fails
                   .slice(0, 5)
-                  .map(
-                    (f) => `<div class="list-item">
-                      <div class="item-main">
-                        <div class="item-title mono">${esc(f.fingerprint)}</div>
-                        <div class="item-sub wrap">${esc(f.errorType || '')} · ${esc(
-                          (f.rawRemark || '').slice(0, 120),
-                        )}</div>
-                      </div>
-                      ${failureActionsHtml(f)}
-                    </div>`,
+                  .map((f) =>
+                    failureRowHtml(f, {
+                      extraSub: `<div class="item-sub wrap">${esc(f.errorType || '')} · ${esc(
+                        (f.rawRemark || '').slice(0, 120),
+                      )}</div>`,
+                    }),
                   )
                   .join('')}</div>
                 <p class="hint">
@@ -2193,17 +2280,13 @@
         ${
           fails.length
             ? `<div class="list">${fails
-                .map(
-                  (f) => `<div class="list-item">
-                    <div class="item-main">
-                      <div class="item-title mono">${esc(f.fingerprint)}</div>
-                      <div class="item-sub">${esc(f.flowName || '未知流程')} · ${esc(
-                        f.errorType || '',
-                      )} · ${esc(relTime(f.lastSeen))}</div>
-                      <div class="item-sub wrap">${esc((f.rawRemark || '').slice(0, 240))}</div>
-                    </div>
-                    ${failureActionsHtml(f)}
-                  </div>`,
+                .map((f) =>
+                  failureRowHtml(f, {
+                    extraSub: `<div class="item-sub">${esc(f.flowName || '未知流程')} · ${esc(
+                      f.errorType || '',
+                    )} · ${esc(relTime(f.lastSeen))}</div>
+                    <div class="item-sub wrap">${esc((f.rawRemark || '').slice(0, 240))}</div>`,
+                  }),
                 )
                 .join('')}</div>`
             : empty('无失败记录')
