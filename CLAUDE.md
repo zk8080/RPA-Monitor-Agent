@@ -29,14 +29,18 @@
 
 | 主题 | 实现 |
 |------|------|
-| poll | 默认 **最近 24h**；`lastPollFindings` |
+| poll | 默认 **最近 24h**；翻页上限 **`pollMaxPages`（默认 50）**；CLI 与 service 一致 |
+| queue 时间 | **`lastSeen`/`lastFailureAt` = 影刀 job 失败时间**；`lastPolledAt` = poll 写入；同 jobUuid 不虚增 occurrence |
+| 指纹 | remark → 日志补全；调度层无流程名 → 前缀「调度层」+ 解析「原因：」；弱 `unknown-flow\|超时` 不跨应用归并 |
 | resolve_app | ShadowBot 自动 `xbot_robot` |
 | diagnose | playbook：规则 ± LLM ± rpa-skill；**triage** 出 fixClass |
 | maintain | playbook skill：`inspect` / `fix`（默认 dry-run）/ `rollback` |
 | 写盘 | 仅 `maintain fix --apply` + autoFix 配置；**service 不自动改 py** |
 | report | 本轮 findings 条数，无历史 occurrence 展示 |
+| workbench | 失败时间 **绝对本地时间**；跨应用卡片不展示内部 errorSignature |
 | LLM | `lib/llm.js`；timeout 默认 600s |
 | 形态 | **Agent skills + tools**；CLI/service 为触发方式，非「散装脚本身份」 |
+| 验证补充 | `node monitor/test_queue_time.js` |
 
 
 ## 与 rpa-skill 的关系
@@ -61,7 +65,9 @@ D:\RPA-Monitor-Agent  消费：监听 OpenAPI + 诊断 Agent + 日报 / KB
    - `node monitor/service.js --once`  
    - `node monitor/agent.js maintain inspect --robot <uuid>`  
    - `node monitor/test_maintain.js`
-   - `node monitor/test_workbench.js`  
+   - `node monitor/test_workbench.js`
+   - `node monitor/test_queue_time.js`  
+
 4. 密钥：`config.local.js` gitignore  
 
 ### 当前实现进度

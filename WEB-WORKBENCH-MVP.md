@@ -101,7 +101,8 @@
 | 本机应用数 | `scanLocalApps().apps.length` |
 | Queue 深度 / 未诊断 | `listQueueItems` |
 | Runtime | `state`: uptime、lastPollAt、lastDiagnoseAt、pid |
-| 近窗有问题的应用 | queue 按 `robotUuid` 聚合，按 `lastSeen` 排序，取 Top 10 |
+| 近窗有问题的应用 | queue 按 `robotUuid` 聚合，按**真实失败时间**（`lastFailureAt` ‖ `lastSeen`）排序，取 Top 10 |
+| 跨应用根因 | S10b：`errorSignature` ≥2 app；**不展示**内部 signature 原文；过弱 `unknown-flow|…` 不入组 |
 | 本机 ShadowBot 根 | `getShadowBotUsersRoot`（展示用，确认扫盘位置） |
 
 ### 3.3 应用列表行
@@ -113,7 +114,7 @@
 | userId | ShadowBot 账号目录 |
 | xbotDir | resolve |
 | failureCount / undiagnosedCount | queue 聚合 |
-| lastFailureAt | queue `lastSeen` max |
+| lastFailureAt | queue **真实失败时间** max（`lastFailureAt` ‖ `lastSeen`；非 poll 墙钟） |
 
 ### 3.4 应用详情
 
@@ -137,8 +138,8 @@
 
 **Tab C · 相关问题（只读）**
 
-- `list_app_failures` 等价数据：fingerprint、remark 摘要、diagnosed、lastSeen
-- 链到 fingerprint 文本即可（P1 再做诊断详情页）
+- `list_app_failures` 等价数据：fingerprint、remark 摘要、diagnosed、**失败绝对时间**（`lastFailureAt` / `lastSeen`，本地 `yyyy-MM-dd HH:mm:ss`，不用「N 小时前」）
+- 链到 fingerprint / 问题详情页（S25b）
 
 ---
 

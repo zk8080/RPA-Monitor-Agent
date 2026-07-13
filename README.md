@@ -109,7 +109,8 @@ npm start
 | **S17** 诊后 dry-run 存 patch | ✅（`maintain.autoPlanOnDiagnose`，默认关） |
 | **S18** 修复验证闭环 | ✅（pending_verify / regressed / verified） |
 | **S20 / S10a / S19** P1 | ✅ 日报挂钩 · KB-first · 空路径 fixer |
-| **S10b** 跨应用归并 | ✅ errorSignature ≥2 app |
+| **S10b** 跨应用归并 | ✅ errorSignature ≥2 app；弱 unknown-flow 不归并；卡片不展示内部 signature |
+| queue 失败时间 | ✅ 影刀 job 时间（非 poll 墙钟）；工作台绝对本地时间 |
 | S10c+ 后续 | 见下表 |
 | service 自动 apply | **永不默认** |
 

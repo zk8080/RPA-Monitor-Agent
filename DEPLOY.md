@@ -38,20 +38,20 @@ npm run once
 # 前台常驻（调试）
 npm start
 
-# 后台常驻 + 写日志（推荐）
-powershell -File deploy\windows\start-service.ps1
+# 后台常驻 + 写日志（推荐；经任务计划拉起，关终端不杀进程）
+powershell -NoProfile -ExecutionPolicy Bypass -File deploy\windows\start-service.ps1
+
+# 停止
+powershell -NoProfile -ExecutionPolicy Bypass -File deploy\windows\stop-service.ps1
 ```
 
-**开机自启（任务计划）：**
+**说明：**
 
-1. 打开「任务计划程序」→ 创建任务  
-2. 触发器：登录时 / 启动时  
-3. 操作：启动程序  
-   - 程序：`powershell.exe`  
-   - 参数：`-NoProfile -ExecutionPolicy Bypass -File "D:\RPA-Monitor-Agent\deploy\windows\start-service.ps1"`  
-   - 起始于：`D:\RPA-Monitor-Agent`  
-4. 条件：取消「只有交流电源才运行」（笔记本服务器可按需）  
-5. 设置：若失败，每隔 1 分钟 重新启动  
+- `start-service.ps1` 会注册任务计划 **`RPA-Monitor-Agent`**（登录自启 + 立刻启动），action 为直接跑 `node monitor/service.js`（非 powershell 子进程）。  
+- 日志：`data/logs/service-yyyyMMdd.log`（service 进程内追加）+ 启动记录。  
+- 单实例：`data/service.pid`；`stop-service.ps1` 先停任务再杀进程，避免 RestartCount 拉回。  
+- 感知翻页：`pollMaxPages`（默认 50）× `size`（默认 50）；**service 不再写死 3 页**。  
+- 可选 `robotClientUuid`：空 = 密钥可见范围内全部应用；填了才限某客户端。
 
 **备选：只定时、不常驻**
 
@@ -165,7 +165,7 @@ node -e "const c=require('./monitor/lib/config').loadConfig(); console.log(c.rpa
 | `llmApiStyle` | `openai`（默认）或 `anthropic` | 三方中转一般用 openai |
 | `llmTimeoutMs` | LLM 超时 ms | 默认 **600000**（10 分钟） |
 | `pollLookbackHours` | 感知时间窗（小时） | 默认 **24** |
-| `pollMaxPages` | 时间窗内最多翻页 | 默认 50 |
+| `pollMaxPages` | 时间窗内最多翻页（CLI **与 service 共用**） | 默认 **50**（约 50×size 条/轮上限） |
 | `shadowbotUserId` / `shadowbotUsersRoot` | 本机流程自动发现 | Windows 有客户端时可填 userId 固定账号 |
 | （兼容）`anthropicApiKey` | 旧字段，仍可读 | 建议迁到 llm* |
 
