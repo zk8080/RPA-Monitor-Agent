@@ -301,11 +301,13 @@
         const name = opts.label || agentId;
         const pasteHint =
           r.method === 'terminal-cmd' || r.method === 'terminal-osascript' || r.method === 'terminal-linux'
-            ? `已在终端启动 ${name}；提示词已复制，在对话里 Ctrl+V`
-            : `已请求用 ${name} 打开；提示词已复制，在 Chat 里 Ctrl+V`;
-        toast(pasteHint, 3600);
+            ? `已启动 ${name} · 提示词已复制`
+            : `已打开 ${name} · 提示词已复制`;
+        toast(pasteHint, 2800);
         if (hintEl) {
-          hintEl.innerHTML = `${esc(pasteHint)} <span class="mono">${esc(r.opened || '')}</span>`;
+          hintEl.innerHTML = r.opened
+            ? `<span class="mono">${esc(r.opened)}</span>`
+            : esc(pasteHint);
         }
         return true;
       }
@@ -441,7 +443,6 @@
               )}</button>`
             : `<div class="handoff-path muted">未解析到 xbot_robot 路径</div>`
         }
-        <p class="handoff-hint">打开后在 Chat 粘贴提示词（已自动复制）· 先 rpa understand，再改代码</p>
       </div>
       ${openMenu ? `<div class="handoff-actions">${openMenu}</div>` : ''}
     </div>`;
@@ -516,26 +517,13 @@
 
   function setHeader(title, desc = '') {
     if (pageTitle) pageTitle.textContent = title || '';
-    if (pageDesc) pageDesc.textContent = desc || '';
-    document.title = title ? `${title} · RPA Workbench` : 'RPA Workbench';
-    const kicker = document.getElementById('page-kicker');
-    if (kicker) {
-      const route = parseRoute();
-      kicker.textContent =
-        route.name === 'apps'
-          ? 'Catalog'
-          : route.name === 'app'
-            ? 'Application'
-            : route.name === 'finding'
-              ? 'Finding'
-              : route.name === 'reports' || route.name === 'report'
-                ? 'Reports'
-                : route.name === 'settings'
-                  ? route.tab === 'prompts'
-                    ? 'Prompts'
-                    : 'Settings'
-                  : 'Workspace';
+    if (pageDesc) {
+      const text = String(desc || '').trim();
+      pageDesc.textContent = text;
+      if (text) pageDesc.removeAttribute('hidden');
+      else pageDesc.setAttribute('hidden', '');
     }
+    document.title = title ? `${title} · RPA Workbench` : 'RPA Workbench';
   }
 
   function firstRunTipHtml() {
@@ -545,7 +533,7 @@
       // ignore
     }
     return `<div class="tip" id="first-run-tip" role="note">
-      <p><strong>主路径：</strong>找到应用或失败 → <strong>在 Agent 打开</strong> → Chat 里 Ctrl+V。快捷键 <kbd>/</kbd> 搜索。</p>
+      <p>打开应用 → <strong>在 Agent 打开</strong> → Chat 粘贴（Ctrl+V）。</p>
       <button type="button" class="btn sm" id="btn-dismiss-tip">知道了</button>
     </div>`;
   }
@@ -580,7 +568,13 @@
 
   function focusActiveTab(tab) {
     const id =
-      tab === 'flow' ? 'tab-flow' : tab === 'failures' ? 'tab-failures' : 'tab-overview';
+      tab === 'flow'
+        ? 'tab-flow'
+        : tab === 'impl'
+          ? 'tab-impl'
+          : tab === 'failures'
+            ? 'tab-failures'
+            : 'tab-overview';
     const el = document.getElementById(id);
     if (!el) return;
     try {
@@ -588,6 +582,14 @@
     } catch {
       el.focus();
     }
+  }
+
+  /** 应用详情顶栏 tab：overview | flow | impl | failures */
+  function normalizeAppTab(tab) {
+    if (tab === 'flow' || tab === 'impl' || tab === 'failures') return tab;
+    // 旧链接 /structure 等落到实现
+    if (tab === 'structure' || tab === 'callgraph' || tab === 'graph') return 'impl';
+    return 'overview';
   }
 
   /**
@@ -633,10 +635,8 @@
       .join('');
     return `<div class="panel guidance-panel">
       <h2>修复建议 · ${esc(g.title || '')}</h2>
-      <p class="summary-line" style="margin-bottom:12px">${esc(g.summary || '')}</p>
+      ${g.summary ? `<p class="summary-line" style="margin-bottom:12px">${esc(g.summary)}</p>` : ''}
       ${steps ? `<ul class="plain-list">${steps}</ul>` : ''}
-      <p class="hint mt">${esc(g.cta || '')}
-        ${g.fixClass ? ` · 分诊 ${esc(g.fixClass)}/${esc(g.fixability || '')}` : ''}</p>
     </div>`;
   }
 
@@ -767,12 +767,7 @@
         : 'llm';
 
     setNav('settings');
-    setHeader(
-      '设置',
-      tab === 'prompts'
-        ? '业务解读提示词 · data/settings.business-brief.json'
-        : 'LLM 连接 · data/settings.llm.json',
-    );
+    setHeader('设置');
     activeCopyPath = '';
     activeAgentPrompt = '';
     content.innerHTML = loadingHtml('加载设置…');
@@ -814,12 +809,12 @@
           <p class="meta mb">
             来源 <code>${esc(data.source || 'none')}</code>
             · ${data.apiKeyConfigured ? '已配置 Key' : '未配置 Key'}
-            ${data.updatedAt ? `· 文件更新 ${esc(formatTime(data.updatedAt))}` : ''}
+            ${data.updatedAt ? `· ${esc(formatTime(data.updatedAt))}` : ''}
           </p>
           ${
             ro
-              ? `<div class="tip mb">workbench.settingsEnabled=false，当前只读。</div>`
-              : `<p class="faint mb">优先级：环境变量 &gt; data/settings.llm.json &gt; config.local.js。API Key 留空保存表示不修改。</p>`
+              ? `<div class="tip mb">settingsEnabled=false，当前只读。</div>`
+              : ''
           }
           <form id="llm-form" class="settings-form" autocomplete="off">
             <label class="field">
@@ -852,7 +847,7 @@
             </label>
             <label class="field field-check">
               <input name="diagnoseUseLlm" type="checkbox" ${data.diagnoseUseLlm !== false ? 'checked' : ''} ${ro ? 'disabled' : ''} />
-              <span>诊断默认使用 LLM（service / 工作台一键 diagnose）</span>
+              <span>诊断使用 LLM</span>
             </label>
             <div class="settings-actions">
               <button type="submit" class="btn primary" id="btn-llm-save" ${ro ? 'disabled' : ''}>保存</button>
@@ -869,12 +864,8 @@
       }>
         <div class="panel settings-panel">
           <p class="meta mb">
-            存盘 <code>data/settings.business-brief.json</code>
-            · ${briefCfg && briefCfg.customized ? '已自定义' : '使用内置默认'}
+            ${briefCfg && briefCfg.customized ? '已自定义' : '内置默认'}
             ${briefCfg && briefCfg.updatedAt ? `· ${esc(formatTime(briefCfg.updatedAt))}` : ''}
-          </p>
-          <p class="faint mb">
-            User 模板请保留 <code>{{digest}}</code>（或 <code>{{material}}</code>）。改提示词后请在应用页点「重新生成」。
           </p>
           <form id="brief-prompt-form" class="settings-form">
             <label class="field">
@@ -882,8 +873,8 @@
               <textarea name="systemPrompt" class="field-input field-textarea" rows="10" ${briefRo ? 'readonly' : ''}>${esc(systemVal)}</textarea>
             </label>
             <label class="field">
-              <span class="field-label">User prompt 模板</span>
-              <textarea name="userPromptTemplate" class="field-input field-textarea" rows="14" ${briefRo ? 'readonly' : ''}>${esc(userVal)}</textarea>
+              <span class="field-label">User prompt 模板（需含 {{digest}}）</span>
+              <textarea name="userPromptTemplate" class="field-input field-textarea" rows="14" ${briefRo ? 'readonly' : ''} placeholder="须包含 {{digest}} 或 {{material}}">${esc(userVal)}</textarea>
             </label>
             <div class="grid-2">
               <label class="field">
@@ -937,12 +928,7 @@
         if (next === 'prompts') promptPane.removeAttribute('hidden');
         else promptPane.setAttribute('hidden', '');
       }
-      setHeader(
-        '设置',
-        next === 'prompts'
-          ? '业务解读提示词 · data/settings.business-brief.json'
-          : 'LLM 连接 · data/settings.llm.json',
-      );
+      setHeader('设置');
     }
 
     const form = $('#llm-form');
@@ -1213,7 +1199,7 @@
 
   async function renderReports() {
     setNav('reports');
-    setHeader('日报', 'data/reports 下的诊断日报（含 maintain 节）· 可复制给 Coding Agent');
+    setHeader('日报');
     setActiveHandoff();
     content.innerHTML = loadingHtml('加载日报列表…');
 
@@ -1226,7 +1212,6 @@
     content.innerHTML = `
       <div class="actions mb">
         <button type="button" class="btn primary" id="btn-gen-report">生成今日日报</button>
-        <span class="hint">来自 ${esc(data.reportsDir || 'data/reports')}</span>
       </div>
       <div class="panel">
         <h2>历史日报 <span class="meta">${list.length}</span></h2>
@@ -1243,7 +1228,7 @@
                   </a>`,
                 )
                 .join('')}</div>`
-            : empty('还没有日报文件', '点击「生成今日日报」，或运行 node monitor/report.js')
+            : empty('还没有日报', '点上方「生成今日日报」')
         }
       </div>
     `;
@@ -1277,7 +1262,7 @@
 
   async function renderReport(date) {
     setNav('reports');
-    setHeader(`日报 ${date}`, '复制全文后粘贴到 Coding Agent');
+    setHeader(`日报 ${date}`);
     setActiveHandoff();
     content.innerHTML = loadingHtml('加载日报…');
 
@@ -1406,10 +1391,10 @@
     }
   }
 
-  function empty(title, body, ctaHtml = '') {
-    return `<div class="empty"><strong>${esc(title)}</strong><p>${esc(body)}</p>${
-      ctaHtml ? `<div class="empty-cta">${ctaHtml}</div>` : ''
-    }</div>`;
+  function empty(title, body = '', ctaHtml = '') {
+    return `<div class="empty"><strong>${esc(title)}</strong>${
+      body ? `<p>${esc(body)}</p>` : ''
+    }${ctaHtml ? `<div class="empty-cta">${ctaHtml}</div>` : ''}</div>`;
   }
 
   function renderStages(stages) {
@@ -1450,13 +1435,20 @@
     return m ? m[1].trim() : src;
   }
 
-  async function renderMermaidInto(container, source) {
+  /**
+   * @param {HTMLElement} container
+   * @param {string} source
+   * @param {{ compact?: boolean, scale?: number, imgClass?: string }} [opts]
+   *   compact: 业务图用更小间距 + 限宽，避免撑满一屏
+   */
+  async function renderMermaidInto(container, source, opts = {}) {
     if (!container || !source) return null;
     if (typeof mermaid === 'undefined') {
       container.innerHTML = `<div class="muted">未加载 Mermaid 库（需要访问 CDN）</div>
         <div class="pre mt">${esc(source)}</div>`;
       return null;
     }
+    const compact = !!opts.compact;
     try {
       // htmlLabels:false → 原生 SVG 文字，栅格化后不易截断/空白
       mermaid.initialize({
@@ -1465,23 +1457,26 @@
         securityLevel: 'loose',
         flowchart: {
           htmlLabels: false,
-          curve: 'basis',
-          useMaxWidth: false,
-          padding: 16,
-          nodeSpacing: 50,
-          rankSpacing: 50,
+          curve: compact ? 'linear' : 'basis',
+          // 业务图限宽 + 中等纵向间距（比调用图紧，比过小版略松）
+          useMaxWidth: compact,
+          padding: compact ? 10 : 16,
+          nodeSpacing: compact ? 26 : 50,
+          rankSpacing: compact ? 32 : 50,
         },
       });
       const id = `mmd-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
       const { svg } = await mermaid.render(id, source);
-      const pngUrl = await svgMarkupToPngDataUrl(svg, 2);
+      const scale = opts.scale != null ? opts.scale : compact ? 1.5 : 2;
+      const pngUrl = await svgMarkupToPngDataUrl(svg, scale);
+      const imgClass = opts.imgClass || (compact ? 'graph-img graph-img-biz' : 'graph-img');
       if (!pngUrl) {
         // 栅格失败时仍展示 SVG，避免整页空白
         container.innerHTML = svg;
         container.dataset.graphPng = '';
         return null;
       }
-      container.innerHTML = `<img class="graph-img" src="${pngUrl}" alt="流程图" draggable="false" />`;
+      container.innerHTML = `<img class="${imgClass}" src="${pngUrl}" alt="流程图" draggable="false" />`;
       container.dataset.graphPng = pngUrl;
       return pngUrl;
     } catch (e) {
@@ -1628,7 +1623,6 @@
             <img class="graph-fs-img" data-fs-img src="${pngUrl}" alt="${esc(title)}" draggable="false" />
           </div>
         </div>
-        <p class="graph-fs-hint">+/− 或 Ctrl+滚轮缩放 · 拖动画布平移 · Esc 关闭</p>
       </div>`;
     document.body.appendChild(overlay);
     document.body.classList.add('graph-fs-open');
@@ -1809,7 +1803,7 @@
   // ── Home ──
   async function renderHome() {
     setNav('home');
-    setHeader('总览', '从失败应用进入详情，再交给 Coding Agent');
+    setHeader('总览');
     setActiveHandoff();
     content.innerHTML = loadingHtml('加载总览…');
 
@@ -1946,8 +1940,8 @@
                 })
                 .join('')}</div>`
             : empty(
-                '没有需要处理的失败',
-                'queue 为空，或 Agent 尚未 poll。可先浏览全部应用。',
+                '暂无失败',
+                '',
                 '<a class="btn sm primary" href="#/apps">浏览全部应用</a>',
               )
         }
@@ -1963,7 +1957,7 @@
   // ── Apps ──
   async function renderApps() {
     setNav('apps');
-    setHeader('应用', '搜索并打开本机流程');
+    setHeader('应用');
     setActiveHandoff();
     content.innerHTML = loadingHtml('扫描本机应用…');
 
@@ -2006,7 +2000,7 @@
       if (!rows.length) {
         listEl.innerHTML = empty(
           '没有匹配的应用',
-          q ? '换个关键词试试' : '未扫到 xbot_robot，请确认本机已安装影刀并登录过。',
+          q ? '' : '未扫到本机 xbot_robot',
         );
         return;
       }
@@ -2085,7 +2079,7 @@
       ${handoffBarHtml({
         xbotDir: detail.xbotDir || '',
         agentPrompt,
-        pathLabel: '开发 · 交给 Coding Agent',
+        pathLabel: '本地路径',
         robotUuid,
         agents,
       })}
@@ -2102,21 +2096,24 @@
         }" data-tab="flow" aria-selected="${tab === 'flow'}" aria-controls="tab-body" tabindex="${
           tab === 'flow' ? '0' : '-1'
         }">业务流程</button>
+        <button type="button" role="tab" id="tab-impl" class="tab ${
+          tab === 'impl' ? 'active' : ''
+        }" data-tab="impl" aria-selected="${tab === 'impl'}" aria-controls="tab-body" tabindex="${
+          tab === 'impl' ? '0' : '-1'
+        }">实现流程</button>
         <button type="button" role="tab" id="tab-failures" class="tab ${
           tab === 'failures' ? 'active' : ''
         }" data-tab="failures" aria-selected="${tab === 'failures'}" aria-controls="tab-body" tabindex="${
           tab === 'failures' ? '0' : '-1'
         }">相关问题</button>
       </div>
-      <div id="tab-body" role="tabpanel" aria-labelledby="tab-${
-        tab === 'failures' ? 'failures' : tab === 'flow' ? 'flow' : 'overview'
-      }"></div>
+      <div id="tab-body" role="tabpanel" aria-labelledby="tab-${esc(tab)}"></div>
     `;
 
     bindCopyButtons(content);
     bindOpenAgentControls(content, { robotUuid, prompt: agentPrompt });
 
-    const tabOrder = ['overview', 'flow', 'failures'];
+    const tabOrder = ['overview', 'flow', 'impl', 'failures'];
     content.querySelectorAll('[data-tab]').forEach((btn) => {
       btn.onclick = () => {
         location.hash = `#/apps/${encodeURIComponent(robotUuid)}/${btn.getAttribute('data-tab')}`;
@@ -2139,7 +2136,8 @@
 
     const tabBody = $('#tab-body');
     if (tab === 'failures') renderAppFailures(tabBody, detail, robotUuid);
-    else if (tab === 'flow') await renderAppFlow(robotUuid, detail, false);
+    else if (tab === 'flow') await renderAppBusinessFlow(robotUuid, detail);
+    else if (tab === 'impl') await renderAppImplFlow(robotUuid, detail, false);
     else renderAppOverview(tabBody, detail, robotUuid);
   }
 
@@ -2180,7 +2178,7 @@
                 <p class="hint">
                   <a href="#/apps/${encodeURIComponent(robotUuid)}/failures">全部问题</a>
                 </p>`
-              : empty('暂无失败', '可切换到「业务流程」查看调用图。')
+              : empty('暂无失败')
           }
         </div>
       </div>
@@ -2208,7 +2206,7 @@
                   </div>`,
                 )
                 .join('')}</div>`
-            : empty('无失败记录', 'data/queue 中没有该应用条目。')
+            : empty('无失败记录')
         }
       </div>`;
   }
@@ -2277,7 +2275,7 @@
       ${handoffBarHtml({
         xbotDir,
         agentPrompt,
-        pathLabel: '修复 · 交给 Coding Agent',
+        pathLabel: '本地路径',
         robotUuid,
         agents,
       })}
@@ -2324,9 +2322,7 @@
           </div>
           ${k.id ? `<p class="hint mt">KB：${esc(k.id)}</p>` : ''}
         </div>`
-          : !f.diagnosed
-            ? `<p class="hint mt">尚未诊断。需要结构化结论时再点「诊断」；主路径仍是上方「在 Agent 打开」。</p>`
-            : ''
+          : ''
       }
 
       ${
@@ -2366,18 +2362,273 @@
           host.innerHTML = `<div class="err">${esc(pd.message || pd.code)}</div>`;
           return;
         }
-        host.innerHTML = `
-          <div class="pre">${esc(pd.diff || '(empty diff)')}</div>
-          <p class="hint">写盘请用 CLI maintain fix --apply（Web 不 apply）</p>`;
+        host.innerHTML = `<div class="pre">${esc(pd.diff || '(empty diff)')}</div>`;
       });
     });
   }
 
-  async function renderAppFlow(robotUuid, detail, forceRefresh) {
+  /** 业务流程 Tab：LLM 业务解读 + 业务图（不展示 call graph） */
+  async function renderAppBusinessFlow(robotUuid, detail) {
+    const tabBody = $('#tab-body');
+    if (!tabBody) return;
+
+    tabBody.innerHTML = `
+      <div class="panel" id="business-brief-panel">
+        <div class="graph-bar">
+          <div>
+            <h2 style="margin:0">业务解读 <span class="badge warn">LLM</span></h2>
+          </div>
+          <div class="actions">
+            <button type="button" class="btn sm primary" id="btn-business-brief">生成解读</button>
+            <button type="button" class="btn sm ghost" id="btn-business-brief-refresh" title="忽略缓存重新生成">重新生成</button>
+          </div>
+        </div>
+        <div id="business-brief-body" class="mt">
+          <p class="faint">加载中…</p>
+        </div>
+      </div>
+    `;
+
+    async function renderBriefInto(el, data) {
+      if (!el) return;
+      if (!data || data.ok === false) {
+        el.innerHTML = `<div class="err">${esc((data && (data.message || data.code)) || '解读失败')}</div>`;
+        return;
+      }
+      if (!data.brief) {
+        el.innerHTML = `<p class="faint">尚未生成</p>`;
+        return;
+      }
+      const b = data.brief || {};
+      const conf =
+        b.confidence != null && Number.isFinite(Number(b.confidence))
+          ? `置信 ${Math.round(Number(b.confidence) * 100)}%`
+          : '';
+      const metaBits = [
+        data.stale ? '结构已更新' : '',
+        data.model || '',
+        data.generatedAt ? formatTime(data.generatedAt) : '',
+        conf,
+      ].filter(Boolean);
+
+      const steps = Array.isArray(b.businessFlow) ? b.businessFlow.filter(Boolean) : [];
+      const systems = Array.isArray(b.systems) ? b.systems.filter(Boolean) : [];
+      const objects = Array.isArray(b.dataObjects) ? b.dataObjects.filter(Boolean) : [];
+      const risks = Array.isArray(b.risks) ? b.risks.filter(Boolean) : [];
+      const questions = Array.isArray(b.openQuestions) ? b.openQuestions.filter(Boolean) : [];
+      const tech = Array.isArray(b.techHighlights) ? b.techHighlights.filter(Boolean) : [];
+      const fd = b.flowDiagram || data.flowDiagram || null;
+      const bizMermaid = fd && fd.mermaid ? String(fd.mermaid).trim() : '';
+      const graphModeLabel =
+        fd && fd.hasBranch
+          ? '主路径 + 推断分支'
+          : fd && fd.mode === 'chain'
+            ? '主路径'
+            : fd && fd.mode
+              ? '业务图'
+              : '';
+
+      const chips = (items) =>
+        items.length
+          ? `<div class="brief-chips">${items.map((x) => `<span class="brief-chip">${esc(x)}</span>`).join('')}</div>`
+          : '<span class="brief-empty">—</span>';
+
+      const softList = (items, cls = '') =>
+        items.length
+          ? `<ul class="brief-list ${cls}">${items.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>`
+          : '';
+
+      el.innerHTML = `
+        <article class="brief">
+          <header class="brief-hero">
+            <h3 class="brief-title">${esc(b.title || '业务解读')}</h3>
+            ${
+              b.purpose
+                ? `<p class="brief-purpose">${esc(b.purpose)}</p>`
+                : ''
+            }
+            ${
+              metaBits.length
+                ? `<p class="brief-meta">${esc(metaBits.join(' · '))}</p>`
+                : ''
+            }
+          </header>
+
+          ${
+            bizMermaid
+              ? `<section class="brief-section brief-section-diagram" aria-label="业务流程图">
+            <div class="brief-diagram-bar">
+              <div class="brief-label">业务流程图 ${
+                graphModeLabel ? `<span class="brief-count">${esc(graphModeLabel)}</span>` : ''
+              }${
+                fd && fd.hasBranch
+                  ? ' <span class="badge warn">分支为推测</span>'
+                  : ''
+              }</div>
+              <div class="actions">
+                <button type="button" class="btn sm ghost" id="btn-biz-graph-fs">全屏</button>
+              </div>
+            </div>
+            <div class="graph graph-biz">
+              <div class="graph-host" id="biz-mermaid-host"><div class="muted">渲染中…</div></div>
+            </div>
+            ${
+              fd && fd.hasBranch
+                ? `<p class="brief-diagram-note">实线为主路径；虚线带条件为推断分支，非正式业务定稿。</p>`
+                : ''
+            }
+          </section>`
+              : ''
+          }
+
+          ${
+            steps.length
+              ? `<section class="brief-section brief-section-primary" aria-label="业务步骤">
+            <div class="brief-label">业务步骤 <span class="brief-count">${steps.length}</span></div>
+            <ol class="brief-steps">
+              ${steps
+                .map(
+                  (s, i) =>
+                    `<li><span class="brief-step-n" aria-hidden="true">${i + 1}</span><span class="brief-step-t">${esc(s)}</span></li>`,
+                )
+                .join('')}
+            </ol>
+          </section>`
+              : ''
+          }
+
+          ${
+            systems.length || objects.length
+              ? `<section class="brief-section brief-section-context" aria-label="系统与对象">
+            <div class="brief-context">
+              ${
+                systems.length
+                  ? `<div class="brief-context-col">
+                <div class="brief-label">涉及系统</div>
+                ${chips(systems)}
+              </div>`
+                  : ''
+              }
+              ${
+                objects.length
+                  ? `<div class="brief-context-col">
+                <div class="brief-label">业务对象</div>
+                ${chips(objects)}
+              </div>`
+                  : ''
+              }
+            </div>
+          </section>`
+              : ''
+          }
+
+          ${
+            risks.length || questions.length
+              ? `<section class="brief-section brief-section-flags" aria-label="风险与待确认">
+            <div class="brief-flags">
+              ${
+                risks.length
+                  ? `<div class="brief-flag brief-flag-risk">
+                <div class="brief-label">风险 <span class="brief-count">${risks.length}</span></div>
+                ${softList(risks)}
+              </div>`
+                  : ''
+              }
+              ${
+                questions.length
+                  ? `<div class="brief-flag brief-flag-q">
+                <div class="brief-label">待业务确认 <span class="brief-count">${questions.length}</span></div>
+                ${softList(questions)}
+              </div>`
+                  : ''
+              }
+            </div>
+          </section>`
+              : ''
+          }
+
+          ${
+            tech.length
+              ? `<details class="brief-tech">
+            <summary>实现要点 <span class="brief-count">${tech.length}</span></summary>
+            ${softList(tech, 'brief-list-tech')}
+          </details>`
+              : ''
+          }
+        </article>
+      `;
+
+      if (bizMermaid) {
+        const host = el.querySelector('#biz-mermaid-host');
+        const pngUrl = await renderMermaidInto(host, bizMermaid, { compact: true });
+        const title = b.title || '业务流程图';
+        const openFs = () => {
+          const url = (host && host.dataset.graphPng) || pngUrl;
+          openGraphFullscreen(url, title);
+        };
+        const fsBtn = el.querySelector('#btn-biz-graph-fs');
+        if (fsBtn) fsBtn.onclick = openFs;
+        if (host) {
+          host.style.cursor = 'zoom-in';
+          host.title = '点击全屏';
+          host.addEventListener('click', openFs);
+        }
+      }
+    }
+
+    async function runBusinessBrief(force) {
+      const bodyEl = $('#business-brief-body');
+      const btn = $('#btn-business-brief');
+      const btn2 = $('#btn-business-brief-refresh');
+      if (bodyEl) bodyEl.innerHTML = loadingHtml(force ? '重新生成业务解读…' : '生成业务解读…');
+      [btn, btn2].forEach((b) => {
+        if (b) b.disabled = true;
+      });
+      try {
+        const data = await api(`/api/apps/${encodeURIComponent(robotUuid)}/business-brief`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ force: !!force }),
+        });
+        await renderBriefInto(bodyEl, data);
+        if (data && data.ok && data.brief) {
+          toast(data.cached ? '已加载保存的解读' : '业务解读已生成并保存');
+        } else toast((data && data.message) || '解读失败');
+      } catch (e) {
+        if (bodyEl) bodyEl.innerHTML = `<div class="err">${esc(e.message || e)}</div>`;
+        toast(e.message || '解读失败');
+      } finally {
+        [btn, btn2].forEach((b) => {
+          if (b) b.disabled = false;
+        });
+      }
+    }
+
+    const briefBtn = $('#btn-business-brief');
+    if (briefBtn) briefBtn.onclick = () => runBusinessBrief(false);
+    const briefRefresh = $('#btn-business-brief-refresh');
+    if (briefRefresh) briefRefresh.onclick = () => runBusinessBrief(true);
+
+    // 进入页面自动加载本机已保存解读（不调 LLM）
+    (async () => {
+      const bodyEl = $('#business-brief-body');
+      try {
+        const data = await api(`/api/apps/${encodeURIComponent(robotUuid)}/business-brief`);
+        await renderBriefInto(bodyEl, data);
+      } catch {
+        if (bodyEl) {
+          bodyEl.innerHTML = '<p class="faint">尚未生成</p>';
+        }
+      }
+    })();
+  }
+
+  /** 实现流程 Tab：rpa-skill understand 调用图与结构明细 */
+  async function renderAppImplFlow(robotUuid, detail, forceRefresh) {
     const tabBody = $('#tab-body');
     if (!tabBody) return;
     tabBody.innerHTML = `<div class="panel">${loadingHtml(
-      `正在解析流程${forceRefresh ? '（刷新）' : ''}…`,
+      `正在解析实现流程${forceRefresh ? '（刷新）' : ''}…`,
     )}</div>`;
 
     const u = await api(
@@ -2385,10 +2636,9 @@
     );
     if (!u.ok) {
       tabBody.innerHTML = `<div class="panel"><div class="err">解析失败：${esc(u.message || u.code)}</div>
-        <p class="hint">检查 rpaSkillPath 与本机 xbot 目录。可点下方「重新解析」。</p>
         <div class="actions mt"><button type="button" class="btn sm" data-refresh-flow>重新解析</button></div></div>`;
       const rb = tabBody.querySelector('[data-refresh-flow]');
-      if (rb) rb.onclick = () => renderAppFlow(robotUuid, detail, true);
+      if (rb) rb.onclick = () => renderAppImplFlow(robotUuid, detail, true);
       return;
     }
     const r = u.result || {};
@@ -2414,10 +2664,10 @@
     const edges = (r.callGraph && r.callGraph.edges) || [];
 
     tabBody.innerHTML = `
-      <div class="panel">
+      <div class="panel" id="impl-call-graph-panel">
         <div class="graph-bar">
           <div>
-            <h2 style="margin:0">${esc(r.projectName || detail.name || '流程图')}</h2>
+            <h2 style="margin:0">${esc(r.projectName || detail.name || '实现调用图')}</h2>
             <p class="hint" style="margin-top:4px">${u.cached ? '缓存' : '实时 rpa-skill'} · ${esc(
               graphMeta || (mermaidSrc ? 'call graph' : '无图'),
             )}</p>
@@ -2437,33 +2687,16 @@
             ? `<div class="graph graph-hero">
                 <div class="graph-host" id="mermaid-host"><div class="muted">渲染中…</div></div>
               </div>
-              <p class="hint">流程图已渲染为 PNG。节点文字完整显示；点「全屏查看」或点击图片滚动浏览。</p>
               <details class="raw"><summary>Mermaid 源码</summary><div class="pre mt">${esc(mermaidSrc)}</div></details>`
-            : empty('没有流程图', '可点「重新解析」。')
+            : empty('没有调用图')
         }
       </div>
 
-      <div class="panel mt" id="business-brief-panel">
-        <div class="graph-bar">
-          <div>
-            <h2 style="margin:0">业务解读 <span class="badge warn">LLM 推测</span></h2>
-            <p class="hint" style="margin-top:4px">基于上方 understand 结构摘要调用模型；非正式业务文档</p>
-          </div>
-          <div class="actions">
-            <button type="button" class="btn sm primary" id="btn-business-brief">生成解读</button>
-            <button type="button" class="btn sm ghost" id="btn-business-brief-refresh" title="忽略缓存重新生成">重新生成</button>
-          </div>
-        </div>
-        <div id="business-brief-body" class="mt">
-          <p class="faint">加载已保存解读…</p>
-        </div>
-      </div>
-
       <details class="panel mt fold">
-        <summary>业务阶段与流程清单</summary>
+        <summary>阶段与流程清单</summary>
         <div class="grid-2 mt">
           <div>
-            <h2>业务阶段</h2>
+            <h2>阶段</h2>
             ${renderStages(r.stages)}
           </div>
           <div>
@@ -2530,115 +2763,12 @@
     `;
 
     const refreshBtn = tabBody.querySelector('[data-refresh-flow]');
-    if (refreshBtn) refreshBtn.onclick = () => renderAppFlow(robotUuid, detail, true);
-
-    function renderBriefInto(el, data) {
-      if (!el) return;
-      if (!data || data.ok === false) {
-        el.innerHTML = `<div class="err">${esc((data && (data.message || data.code)) || '解读失败')}</div>`;
-        return;
-      }
-      if (!data.brief) {
-        el.innerHTML = `<p class="faint">尚未生成。点「生成解读」将调用 LLM 并保存到本机缓存，刷新后仍可查看。</p>`;
-        return;
-      }
-      const b = data.brief || {};
-      const conf =
-        b.confidence != null && Number.isFinite(Number(b.confidence))
-          ? `置信 ${Math.round(Number(b.confidence) * 100)}%`
-          : '';
-      const list = (arr) =>
-        arr && arr.length
-          ? `<ul class="plain-list">${arr.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>`
-          : '<div class="muted">—</div>';
-      el.innerHTML = `
-        <p class="hint">${esc(data.disclaimer || '模型推测')}${
-          data.cached ? ' · 已保存' : ' · 刚生成'
-        }${data.stale ? ' · 流程结构有更新，解读可能偏旧' : ''}${
-          data.model ? ` · ${esc(data.model)}` : ''
-        }${data.generatedAt ? ` · ${esc(formatTime(data.generatedAt))}` : ''}${
-          data.latencyMs != null ? ` · ${esc(data.latencyMs)}ms` : ''
-        }${conf ? ` · ${esc(conf)}` : ''}</p>
-        <h3 class="mt" style="margin-bottom:6px;font-size:15px">${esc(b.title || '业务解读')}</h3>
-        <p class="summary-line">${esc(b.purpose || '—')}</p>
-        <div class="grid-2 mt">
-          <div>
-            <h2>业务步骤</h2>
-            ${list(b.businessFlow)}
-            <h2 class="mt">业务对象</h2>
-            ${list(b.dataObjects)}
-          </div>
-          <div>
-            <h2>涉及系统</h2>
-            ${list(b.systems)}
-            <h2 class="mt">风险</h2>
-            ${list(b.risks)}
-          </div>
-        </div>
-        ${
-          b.techHighlights && b.techHighlights.length
-            ? `<h2 class="mt">实现要点</h2>${list(b.techHighlights)}`
-            : ''
-        }
-        ${
-          b.openQuestions && b.openQuestions.length
-            ? `<h2 class="mt">待业务确认</h2>${list(b.openQuestions)}`
-            : ''
-        }
-      `;
-    }
-
-    async function runBusinessBrief(force) {
-      const bodyEl = $('#business-brief-body');
-      const btn = $('#btn-business-brief');
-      const btn2 = $('#btn-business-brief-refresh');
-      if (bodyEl) bodyEl.innerHTML = loadingHtml(force ? '重新生成业务解读…' : '生成业务解读…');
-      [btn, btn2].forEach((b) => {
-        if (b) b.disabled = true;
-      });
-      try {
-        const data = await api(`/api/apps/${encodeURIComponent(robotUuid)}/business-brief`, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ force: !!force }),
-        });
-        renderBriefInto(bodyEl, data);
-        if (data && data.ok && data.brief) {
-          toast(data.cached ? '已加载保存的解读' : '业务解读已生成并保存');
-        } else toast((data && data.message) || '解读失败');
-      } catch (e) {
-        if (bodyEl) bodyEl.innerHTML = `<div class="err">${esc(e.message || e)}</div>`;
-        toast(e.message || '解读失败');
-      } finally {
-        [btn, btn2].forEach((b) => {
-          if (b) b.disabled = false;
-        });
-      }
-    }
-
-    const briefBtn = $('#btn-business-brief');
-    if (briefBtn) briefBtn.onclick = () => runBusinessBrief(false);
-    const briefRefresh = $('#btn-business-brief-refresh');
-    if (briefRefresh) briefRefresh.onclick = () => runBusinessBrief(true);
-
-    // 进入页面自动加载本机已保存解读（不调 LLM）
-    (async () => {
-      const bodyEl = $('#business-brief-body');
-      try {
-        const data = await api(`/api/apps/${encodeURIComponent(robotUuid)}/business-brief`);
-        renderBriefInto(bodyEl, data);
-      } catch {
-        if (bodyEl) {
-          bodyEl.innerHTML =
-            '<p class="faint">尚未生成。点「生成解读」将调用 LLM 并保存，刷新后仍可查看。</p>';
-        }
-      }
-    })();
+    if (refreshBtn) refreshBtn.onclick = () => renderAppImplFlow(robotUuid, detail, true);
 
     if (mermaidSrc) {
       const preview = $('#mermaid-host');
       const pngUrl = await renderMermaidInto(preview, mermaidSrc);
-      const title = r.projectName || detail.name || '流程图';
+      const title = `${r.projectName || detail.name || '应用'} · 实现调用图`;
       const openFs = () => {
         const url = (preview && preview.dataset.graphPng) || pngUrl;
         openGraphFullscreen(url, title);
@@ -2663,7 +2793,7 @@
       else if (r.name === 'settings') await renderSettings(r.tab);
       else if (r.name === 'apps') await renderApps();
       else if (r.name === 'app') {
-        const tab = r.tab === 'flow' || r.tab === 'failures' ? r.tab : 'overview';
+        const tab = normalizeAppTab(r.tab);
         await renderApp(r.robotUuid, tab);
       } else await renderHome();
     } catch (e) {
@@ -2672,7 +2802,11 @@
 
     // Prefer restoring tab focus when we just keyboard-navigated tabs
     const wantTab = sessionStorage.getItem('rpa_wb_focus_tab');
-    if (wantTab && r.name === 'app' && (r.tab === wantTab || (!r.tab && wantTab === 'overview'))) {
+    if (
+      wantTab &&
+      r.name === 'app' &&
+      (normalizeAppTab(r.tab) === wantTab || (!r.tab && wantTab === 'overview'))
+    ) {
       focusActiveTab(wantTab);
       sessionStorage.removeItem('rpa_wb_focus_tab');
       return;
@@ -2734,12 +2868,12 @@
     if (!typing && !e.metaKey && !e.ctrlKey && !e.altKey && (e.key === 'c' || e.key === 'C')) {
       if (e.shiftKey && activeAgentPrompt) {
         e.preventDefault();
-        copyText(activeAgentPrompt, 'Agent 提示已复制 · 粘贴到对话即可');
+        copyText(activeAgentPrompt, 'Agent 提示已复制');
         return;
       }
       if (!e.shiftKey && activeCopyPath) {
         e.preventDefault();
-        copyText(activeCopyPath, '路径已复制 · 粘贴到 Coding Agent 打开');
+        copyText(activeCopyPath, '路径已复制');
         return;
       }
     }

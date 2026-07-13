@@ -1,5 +1,5 @@
 /**
- * 业务解读：digest 压缩、normalize、可配置提示词（不调真实 LLM）
+ * 业务解读：digest 压缩、normalize、可配置提示词、业务图（不调真实 LLM）
  */
 const assert = require('assert');
 const fs = require('fs');
@@ -14,6 +14,11 @@ const {
   savePromptSettings,
   resetPromptSettings,
   getDefaultPromptSettings,
+  chainGraphFromSteps,
+  normalizeFlowGraph,
+  resolveBusinessFlowGraph,
+  flowGraphToMermaid,
+  enrichBriefForClient,
 } = require('./lib/business-brief');
 
 const digest = buildUnderstandDigest(
@@ -55,11 +60,78 @@ const brief = normalizeBrief({
 assert.strictEqual(brief.title, '补全发票信息');
 assert.strictEqual(brief.businessFlow.length, 2);
 assert.strictEqual(brief.confidence, 0.7);
+// 无 flowGraph 时降级为主路径链
+assert.ok(brief.flowDiagram);
+assert.strictEqual(brief.flowDiagram.mode, 'chain');
+assert.ok(brief.flowDiagram.mermaid.includes('flowchart TD'));
+assert.ok(brief.flowDiagram.mermaid.includes('登录'));
+assert.strictEqual(brief.flowDiagram.hasBranch, false);
 
-// 提示词模板
+// 合法 flowGraph：主路径 + 失败分支
+const withBranch = normalizeBrief({
+  title: '录入',
+  purpose: '录报告',
+  businessFlow: ['取数', '录入', '回写成功', '记失败'],
+  flowGraph: {
+    nodes: [
+      { id: 'n1', label: '取数' },
+      { id: 'n2', label: '录入' },
+      { id: 'n3', label: '回写成功' },
+      { id: 'n4', label: '记失败' },
+    ],
+    edges: [
+      { from: 'n1', to: 'n2' },
+      { from: 'n2', to: 'n3', when: '成功' },
+      { from: 'n2', to: 'n4', when: '失败' },
+    ],
+  },
+});
+assert.strictEqual(withBranch.flowDiagram.hasBranch, true);
+assert.ok(withBranch.flowDiagram.mermaid.includes('-.->'));
+assert.ok(withBranch.flowDiagram.branchEdgeCount >= 2);
+
+// 非法边（指向不存在节点）→ 降级或重建，不得抛错
+const badGraph = normalizeFlowGraph(
+  {
+    nodes: [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }],
+    edges: [{ from: 'a', to: 'ghost' }, { from: 'a', to: 'b' }],
+  },
+  ['A', 'B'],
+);
+assert.ok(badGraph);
+assert.ok(badGraph.edges.some((e) => e.from === 'a' && e.to === 'b'));
+
+const chain = chainGraphFromSteps(['一步', '二步', '三步']);
+assert.strictEqual(chain.nodes.length, 3);
+assert.strictEqual(chain.edges.length, 2);
+assert.strictEqual(chain.mode, 'chain');
+const mmd = flowGraphToMermaid(chain);
+assert.ok(mmd.includes('s1'));
+assert.ok(mmd.includes('-->'));
+
+// 旧 brief 无 flowDiagram 时 enrich 可补
+const enriched = enrichBriefForClient({
+  title: 'x',
+  businessFlow: ['甲', '乙'],
+});
+assert.ok(enriched.flowDiagram.mermaid.includes('甲'));
+
+const resolved = resolveBusinessFlowGraph({
+  businessFlow: ['x', 'y'],
+  flowGraph: { nodes: [], edges: [] },
+});
+assert.strictEqual(resolved.mode, 'chain');
+
+// 提示词模板：业务流而非实现链路 + flowGraph
 const def = getDefaultPromptSettings();
 assert.ok(def.systemPrompt.includes('影刀 RPA'));
+assert.ok(def.systemPrompt.includes('业务流程'));
+assert.ok(def.systemPrompt.includes('禁止'));
+assert.ok(def.systemPrompt.includes('flowGraph'));
 assert.ok(def.userPromptTemplate.includes('{{digest}}'));
+assert.ok(def.userPromptTemplate.includes('flowGraph'));
+assert.ok(def.userPromptTemplate.includes('好例子'));
+assert.ok(def.userPromptTemplate.includes('坏例子'));
 const rendered = renderUserPrompt('前言\n{{digest}}\n后记', { a: 1 });
 assert.ok(rendered.includes('"a": 1'));
 assert.ok(rendered.includes('前言'));

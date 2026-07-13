@@ -312,14 +312,6 @@ summary:focus-visible {
   width: 100%;
   margin: 0 auto;
 }
-.header-kicker {
-  margin: 0 0 8px;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--accent);
-}
 .header h1 {
   margin: 0;
   font-size: 28px;
@@ -335,6 +327,9 @@ summary:focus-visible {
   color: var(--text-2);
   max-width: 52ch;
   line-height: 1.5;
+}
+.header-desc[hidden] {
+  display: none;
 }
 .header-actions {
   display: flex;
@@ -713,12 +708,6 @@ a.list-item:hover .item-go,
 .handoff-path.muted {
   cursor: default;
   color: var(--text-3);
-}
-.handoff-hint {
-  margin: 8px 0 0;
-  font-size: 12px;
-  color: var(--text-3);
-  line-height: 1.45;
 }
 .handoff-actions {
   display: flex;
@@ -1100,14 +1089,6 @@ a.list-item:hover .item-go,
   box-shadow: 0 1px 3px rgba(0,0,0,0.06);
   /* width/height 由 JS 按 scale 设置 */
 }
-.graph-fs-hint {
-  margin: 0;
-  padding: 6px 14px 10px;
-  font-size: 11px;
-  color: var(--text-3);
-  border-top: 1px solid var(--border);
-  flex-shrink: 0;
-}
 body.graph-fs-open {
   overflow: hidden;
 }
@@ -1134,6 +1115,286 @@ body.graph-fs-open {
   color: var(--text-2);
   max-width: 72ch;
   line-height: 1.55;
+}
+
+/* ── Business brief: clear primary → secondary hierarchy ── */
+.brief {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+.brief-hero {
+  padding-bottom: var(--space-4);
+  border-bottom: 1px solid var(--border);
+}
+.brief-title {
+  margin: 0 0 var(--space-2);
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.3;
+  color: var(--text);
+  text-wrap: balance;
+  max-width: 42ch;
+}
+.brief-purpose {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--text-2);
+  max-width: 68ch;
+  text-wrap: pretty;
+}
+.brief-meta {
+  margin: var(--space-3) 0 0;
+  font-size: 12px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+.brief-section {
+  min-width: 0;
+}
+.brief-label {
+  margin: 0 0 var(--space-3);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+.brief-count {
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text-3);
+  margin-left: 4px;
+  font-variant-numeric: tabular-nums;
+}
+.brief-empty {
+  color: var(--text-3);
+  font-size: 13px;
+}
+
+/* Business flowchart (from businessFlow / flowGraph) */
+.brief-diagram-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+.brief-diagram-bar .brief-label {
+  margin: 0;
+}
+.graph.graph-biz {
+  min-height: 0;
+  max-height: 360px;
+  padding: 14px 16px;
+  background: var(--bg-elevated);
+  border-color: var(--border);
+  box-shadow: none;
+  overflow: auto;
+}
+.graph.graph-biz .graph-host {
+  min-height: 0;
+  max-height: 330px;
+  align-items: flex-start;
+  justify-content: center;
+}
+.graph-img-biz {
+  display: block;
+  max-width: min(100%, 420px);
+  max-height: 330px;
+  width: auto;
+  height: auto;
+  margin: 0 auto;
+  object-fit: contain;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+.brief-diagram-note {
+  margin: var(--space-2) 0 0;
+  font-size: 12px;
+  color: var(--text-3);
+  line-height: 1.4;
+}
+
+/* Primary: numbered business steps (spine of the brief) */
+.brief-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  counter-reset: none;
+}
+.brief-steps li {
+  display: grid;
+  grid-template-columns: 28px 1fr;
+  gap: var(--space-3);
+  align-items: start;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+.brief-steps li:first-child {
+  padding-top: 0;
+}
+.brief-steps li:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+.brief-step-n {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  margin-top: 1px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-2);
+  flex-shrink: 0;
+}
+.brief-step-t {
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text);
+  max-width: 68ch;
+}
+
+/* Secondary: systems + objects as chips (scan, not read) */
+.brief-context {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-5);
+}
+.brief-context-col {
+  min-width: 0;
+}
+.brief-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.brief-chip {
+  display: inline-block;
+  max-width: 100%;
+  padding: 5px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-2);
+  word-break: break-word;
+}
+
+/* Tertiary: risks + open questions (quieter density) */
+.brief-flags {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-4);
+}
+.brief-flag {
+  min-width: 0;
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+}
+.brief-flag .brief-label {
+  margin-bottom: var(--space-2);
+}
+.brief-flag-risk {
+  background: var(--warn-bg);
+  border-color: rgba(180, 83, 9, 0.16);
+}
+.brief-flag-risk .brief-label {
+  color: var(--warn);
+}
+.brief-flag-q {
+  background: var(--surface-2);
+}
+.brief-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.brief-list li {
+  position: relative;
+  padding: 6px 0 6px 14px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text-2);
+}
+.brief-list li::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0.75em;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--text-3);
+  opacity: 0.55;
+}
+.brief-flag-risk .brief-list li::before {
+  background: var(--warn);
+  opacity: 0.75;
+}
+.brief-list li + li {
+  border-top: 1px solid transparent;
+}
+
+/* Folded: tech notes — lowest priority */
+.brief-tech {
+  margin: 0;
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border);
+}
+.brief-tech summary {
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  list-style: none;
+  user-select: none;
+}
+.brief-tech summary::-webkit-details-marker {
+  display: none;
+}
+.brief-tech summary::before {
+  content: '▸';
+  display: inline-block;
+  margin-right: 6px;
+  color: var(--text-3);
+  transition: transform 0.12s var(--ease);
+}
+.brief-tech[open] summary::before {
+  transform: rotate(90deg);
+}
+.brief-list-tech {
+  margin-top: var(--space-3);
+}
+.brief-list-tech li {
+  font-size: 12px;
+  color: var(--text-3);
+  font-family: var(--mono);
+}
+
+@media (max-width: 720px) {
+  .brief-context,
+  .brief-flags {
+    grid-template-columns: 1fr;
+  }
 }
 
 .table {
