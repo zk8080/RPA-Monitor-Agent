@@ -531,7 +531,9 @@
               : route.name === 'reports' || route.name === 'report'
                 ? 'Reports'
                 : route.name === 'settings'
-                  ? 'Settings'
+                  ? route.tab === 'prompts'
+                    ? 'Prompts'
+                    : 'Settings'
                   : 'Workspace';
     }
   }
@@ -749,18 +751,36 @@
       };
     }
     if (parts[0] === 'apps') return { name: 'apps' };
-    if (parts[0] === 'settings') return { name: 'settings' };
+    if (parts[0] === 'settings') {
+      const tab = parts[1] === 'prompts' || parts[1] === 'brief' ? 'prompts' : 'llm';
+      return { name: 'settings', tab };
+    }
     return { name: 'home' };
   }
 
-  async function renderSettings() {
+  async function renderSettings(tabHint) {
+    const route = parseRoute();
+    const tab = tabHint === 'prompts' || tabHint === 'llm'
+      ? tabHint
+      : route.name === 'settings' && route.tab
+        ? route.tab
+        : 'llm';
+
     setNav('settings');
-    setHeader('设置', '本机 LLM 配置 · 写入 data/settings.llm.json（不改 config.local.js）');
+    setHeader(
+      '设置',
+      tab === 'prompts'
+        ? '业务解读提示词 · data/settings.business-brief.json'
+        : 'LLM 连接 · data/settings.llm.json',
+    );
     activeCopyPath = '';
     activeAgentPrompt = '';
     content.innerHTML = loadingHtml('加载设置…');
 
-    const data = await api('/api/settings/llm');
+    const [data, briefCfg] = await Promise.all([
+      api('/api/settings/llm'),
+      api('/api/settings/business-brief'),
+    ]);
     if (!data || data.ok === false) {
       content.innerHTML = `<div class="err">加载失败：${esc(data && (data.message || data.code))}</div>`;
       return;
@@ -768,114 +788,213 @@
 
     const locked = data.envLocked || {};
     const ro = data.settingsEnabled === false;
+    const briefRo = ro || (briefCfg && briefCfg.settingsEnabled === false);
     const lockHint = (field) =>
       locked[field]
         ? `<span class="field-lock">环境变量锁定</span>`
         : '';
 
+    const systemVal = (briefCfg && briefCfg.systemPrompt) || '';
+    const userVal = (briefCfg && briefCfg.userPromptTemplate) || '';
+    const tempVal = briefCfg && briefCfg.temperature != null ? briefCfg.temperature : 0.3;
+    const maxTokVal = briefCfg && briefCfg.maxTokens != null ? briefCfg.maxTokens : 1800;
+
     content.innerHTML = `
-      <div class="panel settings-panel">
-        <h2>LLM</h2>
-        <p class="meta mb">
-          来源 <code>${esc(data.source || 'none')}</code>
-          · ${data.apiKeyConfigured ? '已配置 Key' : '未配置 Key'}
-          ${data.updatedAt ? `· 文件更新 ${esc(formatTime(data.updatedAt))}` : ''}
-        </p>
-        ${
-          ro
-            ? `<div class="tip mb">workbench.settingsEnabled=false，当前只读。</div>`
-            : `<p class="faint mb">优先级：环境变量 &gt; data/settings.llm.json &gt; config.local.js。API Key 留空保存表示不修改。</p>`
-        }
-        <form id="llm-form" class="settings-form" autocomplete="off">
-          <label class="field">
-            <span class="field-label">Base URL ${lockHint('baseUrl')}</span>
-            <input name="baseUrl" type="url" class="field-input" value="${esc(data.baseUrl || '')}"
-              placeholder="https://api.openai.com/v1" ${ro || locked.baseUrl ? 'readonly' : ''} />
-          </label>
-          <label class="field">
-            <span class="field-label">API Key ${lockHint('apiKey')}</span>
-            <input name="apiKey" type="password" class="field-input" value=""
-              placeholder="${esc(data.apiKeyMasked ? `已保存 ${data.apiKeyMasked} · 留空不修改` : 'sk-…')}"
-              ${ro || locked.apiKey ? 'readonly' : ''} />
-          </label>
-          <label class="field">
-            <span class="field-label">Model ${lockHint('model')}</span>
-            <input name="model" type="text" class="field-input" value="${esc(data.model || '')}"
-              placeholder="gpt-4o-mini" ${ro || locked.model ? 'readonly' : ''} />
-          </label>
-          <label class="field">
-            <span class="field-label">API 风格 ${lockHint('apiStyle')}</span>
-            <select name="apiStyle" class="field-input" ${ro || locked.apiStyle ? 'disabled' : ''}>
-              <option value="openai" ${data.apiStyle === 'openai' || !data.apiStyle ? 'selected' : ''}>openai（兼容）</option>
-              <option value="anthropic" ${data.apiStyle === 'anthropic' ? 'selected' : ''}>anthropic</option>
-            </select>
-          </label>
-          <label class="field">
-            <span class="field-label">超时 ms ${lockHint('timeoutMs')}</span>
-            <input name="timeoutMs" type="number" min="1000" step="1000" class="field-input"
-              value="${esc(data.timeoutMs || 600000)}" ${ro || locked.timeoutMs ? 'readonly' : ''} />
-          </label>
-          <label class="field field-check">
-            <input name="diagnoseUseLlm" type="checkbox" ${data.diagnoseUseLlm !== false ? 'checked' : ''} ${ro ? 'disabled' : ''} />
-            <span>诊断默认使用 LLM（service / 工作台一键 diagnose）</span>
-          </label>
-          <div class="settings-actions">
-            <button type="submit" class="btn primary" id="btn-llm-save" ${ro ? 'disabled' : ''}>保存</button>
-            <button type="button" class="btn" id="btn-llm-test" ${ro ? 'disabled' : ''}>测试连接</button>
-            <button type="button" class="btn ghost" id="btn-llm-clear-key" ${ro || locked.apiKey ? 'disabled' : ''}>清除 Key</button>
-          </div>
-          <p id="llm-test-result" class="meta mt" role="status"></p>
-        </form>
+      <div class="tabs settings-tabs" role="tablist" aria-label="设置分区">
+        <button type="button" role="tab" class="tab ${tab === 'llm' ? 'active' : ''}"
+          data-settings-tab="llm" aria-selected="${tab === 'llm'}">LLM 连接</button>
+        <button type="button" role="tab" class="tab ${tab === 'prompts' ? 'active' : ''}"
+          data-settings-tab="prompts" aria-selected="${tab === 'prompts'}">业务解读提示词</button>
+      </div>
+
+      <div id="settings-pane-llm" class="settings-pane ${tab === 'llm' ? 'is-active' : ''}" role="tabpanel" ${
+        tab === 'llm' ? '' : 'hidden'
+      }>
+        <div class="panel settings-panel">
+          <p class="meta mb">
+            来源 <code>${esc(data.source || 'none')}</code>
+            · ${data.apiKeyConfigured ? '已配置 Key' : '未配置 Key'}
+            ${data.updatedAt ? `· 文件更新 ${esc(formatTime(data.updatedAt))}` : ''}
+          </p>
+          ${
+            ro
+              ? `<div class="tip mb">workbench.settingsEnabled=false，当前只读。</div>`
+              : `<p class="faint mb">优先级：环境变量 &gt; data/settings.llm.json &gt; config.local.js。API Key 留空保存表示不修改。</p>`
+          }
+          <form id="llm-form" class="settings-form" autocomplete="off">
+            <label class="field">
+              <span class="field-label">Base URL ${lockHint('baseUrl')}</span>
+              <input name="baseUrl" type="url" class="field-input" value="${esc(data.baseUrl || '')}"
+                placeholder="https://api.openai.com/v1" ${ro || locked.baseUrl ? 'readonly' : ''} />
+            </label>
+            <label class="field">
+              <span class="field-label">API Key ${lockHint('apiKey')}</span>
+              <input name="apiKey" type="password" class="field-input" value=""
+                placeholder="${esc(data.apiKeyMasked ? `已保存 ${data.apiKeyMasked} · 留空不修改` : 'sk-…')}"
+                ${ro || locked.apiKey ? 'readonly' : ''} />
+            </label>
+            <label class="field">
+              <span class="field-label">Model ${lockHint('model')}</span>
+              <input name="model" type="text" class="field-input" value="${esc(data.model || '')}"
+                placeholder="gpt-4o-mini" ${ro || locked.model ? 'readonly' : ''} />
+            </label>
+            <label class="field">
+              <span class="field-label">API 风格 ${lockHint('apiStyle')}</span>
+              <select name="apiStyle" class="field-input" ${ro || locked.apiStyle ? 'disabled' : ''}>
+                <option value="openai" ${data.apiStyle === 'openai' || !data.apiStyle ? 'selected' : ''}>openai（兼容）</option>
+                <option value="anthropic" ${data.apiStyle === 'anthropic' ? 'selected' : ''}>anthropic</option>
+              </select>
+            </label>
+            <label class="field">
+              <span class="field-label">超时 ms ${lockHint('timeoutMs')}</span>
+              <input name="timeoutMs" type="number" min="1000" step="1000" class="field-input"
+                value="${esc(data.timeoutMs || 600000)}" ${ro || locked.timeoutMs ? 'readonly' : ''} />
+            </label>
+            <label class="field field-check">
+              <input name="diagnoseUseLlm" type="checkbox" ${data.diagnoseUseLlm !== false ? 'checked' : ''} ${ro ? 'disabled' : ''} />
+              <span>诊断默认使用 LLM（service / 工作台一键 diagnose）</span>
+            </label>
+            <div class="settings-actions">
+              <button type="submit" class="btn primary" id="btn-llm-save" ${ro ? 'disabled' : ''}>保存</button>
+              <button type="button" class="btn" id="btn-llm-test" ${ro ? 'disabled' : ''}>测试连接</button>
+              <button type="button" class="btn ghost" id="btn-llm-clear-key" ${ro || locked.apiKey ? 'disabled' : ''}>清除 Key</button>
+            </div>
+            <p id="llm-test-result" class="meta mt" role="status"></p>
+          </form>
+        </div>
+      </div>
+
+      <div id="settings-pane-prompts" class="settings-pane ${tab === 'prompts' ? 'is-active' : ''}" role="tabpanel" ${
+        tab === 'prompts' ? '' : 'hidden'
+      }>
+        <div class="panel settings-panel">
+          <p class="meta mb">
+            存盘 <code>data/settings.business-brief.json</code>
+            · ${briefCfg && briefCfg.customized ? '已自定义' : '使用内置默认'}
+            ${briefCfg && briefCfg.updatedAt ? `· ${esc(formatTime(briefCfg.updatedAt))}` : ''}
+          </p>
+          <p class="faint mb">
+            User 模板请保留 <code>{{digest}}</code>（或 <code>{{material}}</code>）。改提示词后请在应用页点「重新生成」。
+          </p>
+          <form id="brief-prompt-form" class="settings-form">
+            <label class="field">
+              <span class="field-label">System prompt</span>
+              <textarea name="systemPrompt" class="field-input field-textarea" rows="10" ${briefRo ? 'readonly' : ''}>${esc(systemVal)}</textarea>
+            </label>
+            <label class="field">
+              <span class="field-label">User prompt 模板</span>
+              <textarea name="userPromptTemplate" class="field-input field-textarea" rows="14" ${briefRo ? 'readonly' : ''}>${esc(userVal)}</textarea>
+            </label>
+            <div class="grid-2">
+              <label class="field">
+                <span class="field-label">temperature</span>
+                <input name="temperature" type="number" min="0" max="2" step="0.1" class="field-input"
+                  value="${esc(tempVal)}" ${briefRo ? 'readonly' : ''} />
+              </label>
+              <label class="field">
+                <span class="field-label">maxTokens</span>
+                <input name="maxTokens" type="number" min="256" max="8000" step="100" class="field-input"
+                  value="${esc(maxTokVal)}" ${briefRo ? 'readonly' : ''} />
+              </label>
+            </div>
+            <div class="settings-actions">
+              <button type="submit" class="btn primary" ${briefRo ? 'disabled' : ''}>保存提示词</button>
+              <button type="button" class="btn ghost" id="btn-brief-prompt-reset" ${briefRo ? 'disabled' : ''}>恢复默认</button>
+            </div>
+          </form>
+        </div>
       </div>`;
+
+    // 切换 Tab：改 hash，避免整页堆叠
+    content.querySelectorAll('[data-settings-tab]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const next = btn.getAttribute('data-settings-tab') || 'llm';
+        const hash = next === 'prompts' ? '#/settings/prompts' : '#/settings/llm';
+        if (location.hash === hash) {
+          // 同 hash 时手动切换显示
+          switchSettingsTab(next);
+        } else {
+          location.hash = hash;
+        }
+      });
+    });
+
+    function switchSettingsTab(next) {
+      content.querySelectorAll('[data-settings-tab]').forEach((b) => {
+        const on = b.getAttribute('data-settings-tab') === next;
+        b.classList.toggle('active', on);
+        b.setAttribute('aria-selected', on ? 'true' : 'false');
+      });
+      const llmPane = $('#settings-pane-llm');
+      const promptPane = $('#settings-pane-prompts');
+      if (llmPane) {
+        llmPane.classList.toggle('is-active', next === 'llm');
+        if (next === 'llm') llmPane.removeAttribute('hidden');
+        else llmPane.setAttribute('hidden', '');
+      }
+      if (promptPane) {
+        promptPane.classList.toggle('is-active', next === 'prompts');
+        if (next === 'prompts') promptPane.removeAttribute('hidden');
+        else promptPane.setAttribute('hidden', '');
+      }
+      setHeader(
+        '设置',
+        next === 'prompts'
+          ? '业务解读提示词 · data/settings.business-brief.json'
+          : 'LLM 连接 · data/settings.llm.json',
+      );
+    }
 
     const form = $('#llm-form');
     const resultEl = $('#llm-test-result');
 
     function formBody({ clearKey = false } = {}) {
+      if (!form) return {};
       const fd = new FormData(form);
       const body = {
         baseUrl: String(fd.get('baseUrl') || '').trim(),
         model: String(fd.get('model') || '').trim(),
         apiStyle: String(fd.get('apiStyle') || 'openai'),
         timeoutMs: parseInt(String(fd.get('timeoutMs') || '600000'), 10) || 600000,
-        diagnoseUseLlm: form.querySelector('[name=diagnoseUseLlm]').checked,
+        diagnoseUseLlm: form.querySelector('[name=diagnoseUseLlm]')?.checked !== false,
       };
       const key = String(fd.get('apiKey') || '');
       if (clearKey) body.apiKey = '__CLEAR__';
       else if (key.trim()) body.apiKey = key.trim();
-      // empty key omitted → keep
       return body;
     }
 
-    form.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      if (ro) return;
-      const btn = $('#btn-llm-save');
-      if (btn) {
-        btn.disabled = true;
-        btn.textContent = '保存中…';
-      }
-      try {
-        const r = await api('/api/settings/llm', {
-          method: 'PUT',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify(formBody()),
-        });
-        if (r && r.ok) {
-          toast('LLM 设置已保存');
-          await renderSettings();
-        } else {
-          toast(r.message || r.code || '保存失败');
-        }
-      } catch (err) {
-        toast(err.message || '保存失败');
-      } finally {
+    if (form) {
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        if (ro) return;
+        const btn = $('#btn-llm-save');
         if (btn) {
-          btn.disabled = false;
-          btn.textContent = '保存';
+          btn.disabled = true;
+          btn.textContent = '保存中…';
         }
-      }
-    });
+        try {
+          const r = await api('/api/settings/llm', {
+            method: 'PUT',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(formBody()),
+          });
+          if (r && r.ok) {
+            toast('LLM 设置已保存');
+            await renderSettings('llm');
+          } else {
+            toast(r.message || r.code || '保存失败');
+          }
+        } catch (err) {
+          toast(err.message || '保存失败');
+        } finally {
+          if (btn) {
+            btn.disabled = false;
+            btn.textContent = '保存';
+          }
+        }
+      });
+    }
 
     const testBtn = $('#btn-llm-test');
     if (testBtn) {
@@ -920,10 +1039,53 @@
           });
           if (r && r.ok) {
             toast('API Key 已清除');
-            await renderSettings();
+            await renderSettings('llm');
           } else toast(r.message || '清除失败');
         } catch (err) {
           toast(err.message || '清除失败');
+        }
+      });
+    }
+
+    const briefForm = $('#brief-prompt-form');
+    if (briefForm) {
+      briefForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        if (briefRo) return;
+        const fd = new FormData(briefForm);
+        const body = {
+          systemPrompt: String(fd.get('systemPrompt') || ''),
+          userPromptTemplate: String(fd.get('userPromptTemplate') || ''),
+          temperature: parseFloat(String(fd.get('temperature') || '0.3')),
+          maxTokens: parseInt(String(fd.get('maxTokens') || '1800'), 10),
+        };
+        try {
+          const r = await api('/api/settings/business-brief', {
+            method: 'PUT',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(body),
+          });
+          if (r && r.ok) {
+            toast('业务解读提示词已保存');
+            await renderSettings('prompts');
+          } else toast(r.message || r.code || '保存失败');
+        } catch (err) {
+          toast(err.message || '保存失败');
+        }
+      });
+    }
+    const resetBrief = $('#btn-brief-prompt-reset');
+    if (resetBrief) {
+      resetBrief.addEventListener('click', async () => {
+        if (!confirm('恢复内置默认提示词？将删除 data/settings.business-brief.json')) return;
+        try {
+          const r = await api('/api/settings/business-brief/reset', { method: 'POST' });
+          if (r && r.ok) {
+            toast('已恢复默认提示词');
+            await renderSettings('prompts');
+          } else toast(r.message || '恢复失败');
+        } catch (err) {
+          toast(err.message || '恢复失败');
         }
       });
     }
@@ -2498,7 +2660,7 @@
       if (r.name === 'finding') await renderFinding(r.fingerprint);
       else if (r.name === 'reports') await renderReports();
       else if (r.name === 'report') await renderReport(r.date);
-      else if (r.name === 'settings') await renderSettings();
+      else if (r.name === 'settings') await renderSettings(r.tab);
       else if (r.name === 'apps') await renderApps();
       else if (r.name === 'app') {
         const tab = r.tab === 'flow' || r.tab === 'failures' ? r.tab : 'overview';

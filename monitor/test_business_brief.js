@@ -1,8 +1,20 @@
 /**
- * 业务解读：digest 压缩与 normalize（不调真实 LLM）
+ * 业务解读：digest 压缩、normalize、可配置提示词（不调真实 LLM）
  */
 const assert = require('assert');
-const { buildUnderstandDigest, normalizeBrief, digestFingerprint } = require('./lib/business-brief');
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+const {
+  buildUnderstandDigest,
+  normalizeBrief,
+  digestFingerprint,
+  renderUserPrompt,
+  loadPromptSettings,
+  savePromptSettings,
+  resetPromptSettings,
+  getDefaultPromptSettings,
+} = require('./lib/business-brief');
 
 const digest = buildUnderstandDigest(
   {
@@ -43,5 +55,31 @@ const brief = normalizeBrief({
 assert.strictEqual(brief.title, '补全发票信息');
 assert.strictEqual(brief.businessFlow.length, 2);
 assert.strictEqual(brief.confidence, 0.7);
+
+// 提示词模板
+const def = getDefaultPromptSettings();
+assert.ok(def.systemPrompt.includes('影刀 RPA'));
+assert.ok(def.userPromptTemplate.includes('{{digest}}'));
+const rendered = renderUserPrompt('前言\n{{digest}}\n后记', { a: 1 });
+assert.ok(rendered.includes('"a": 1'));
+assert.ok(rendered.includes('前言'));
+
+const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'rpa-brief-prompt-'));
+const dataDir = path.join(tmp, 'data');
+fs.mkdirSync(dataDir);
+const saved = savePromptSettings(dataDir, {
+  systemPrompt: '自定义 system',
+  userPromptTemplate: '材料：{{material}}',
+  temperature: 0.5,
+  maxTokens: 1000,
+});
+assert.strictEqual(saved.ok, true);
+const loaded = loadPromptSettings(dataDir);
+assert.strictEqual(loaded.systemPrompt, '自定义 system');
+assert.strictEqual(loaded.customized, true);
+assert.strictEqual(loaded.temperature, 0.5);
+const reset = resetPromptSettings(dataDir);
+assert.strictEqual(reset.ok, true);
+assert.strictEqual(loadPromptSettings(dataDir).customized, false);
 
 console.log('✅ test_business_brief passed');

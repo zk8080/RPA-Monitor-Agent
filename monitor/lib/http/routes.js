@@ -161,6 +161,32 @@ async function handleRequest(req, res, ctx) {
         return true;
       }
 
+      // 业务解读提示词模板
+      if (method === 'GET' && pathname === '/api/settings/business-brief') {
+        sendJson(res, 200, workbench.getBusinessBriefPromptSettings(cfg));
+        return true;
+      }
+      if (method === 'PUT' && pathname === '/api/settings/business-brief') {
+        let body = {};
+        try {
+          const raw = await readBody(req);
+          if (raw) body = JSON.parse(raw);
+        } catch {
+          sendJson(res, 400, { ok: false, code: 'bad_json', message: '请求体须为 JSON' });
+          return true;
+        }
+        const result = workbench.saveBusinessBriefPromptSettings(cfg, body);
+        const status = result.ok ? 200 : result.code === 'settings_disabled' ? 403 : 400;
+        sendJson(res, status, result);
+        return true;
+      }
+      if (method === 'POST' && pathname === '/api/settings/business-brief/reset') {
+        const result = workbench.resetBusinessBriefPromptSettings(cfg);
+        const status = result.ok ? 200 : result.code === 'settings_disabled' ? 403 : 400;
+        sendJson(res, status, result);
+        return true;
+      }
+
       if (method === 'GET' && pathname === '/api/overview') {
         sendJson(res, 200, workbench.buildOverview(cfg, state));
         return true;

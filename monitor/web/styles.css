@@ -1380,7 +1380,6 @@ details.fold[open] > summary::before { content: "▾ "; }
 }
 
 /* Settings (S26 LLM) */
-.settings-panel { max-width: 560px; }
 .settings-form { display: flex; flex-direction: column; gap: 14px; margin-top: 8px; }
 .field { display: flex; flex-direction: column; gap: 6px; }
 .field-label { font-size: 12px; font-weight: 600; color: var(--text-2); letter-spacing: 0.02em; }
@@ -1411,3 +1410,38 @@ details.fold[open] > summary::before { content: "▾ "; }
 }
 .field-check input { width: 16px; height: 16px; accent-color: var(--accent); }
 .settings-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 4px; }
+
+.field-textarea {
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.45;
+  min-height: 120px;
+  resize: vertical;
+  white-space: pre-wrap;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+/* Settings：与其它页同一内容宽（.content 的 --content-max），两 Tab 卡片同宽 */
+.settings-tabs {
+  margin-bottom: var(--space-4);
+}
+.settings-pane[hidden] {
+  display: none !important;
+}
+.settings-pane.is-active {
+  display: block;
+  width: 100%;
+}
+.settings-panel {
+  max-width: none;
+  width: 100%;
+  box-sizing: border-box;
+}
+.settings-form {
+  width: 100%;
+}
+.settings-form .field-input {
+  width: 100%;
+  box-sizing: border-box;
+}

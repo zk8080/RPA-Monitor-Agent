@@ -879,6 +879,34 @@ function saveLlmSettingsFromWeb(cfg, body) {
   return { ...getLlmSettings(live), ok: true, saved: true };
 }
 
+/** 业务解读提示词（可配置） */
+function getBusinessBriefPromptSettings(cfg) {
+  // eslint-disable-next-line global-require
+  const businessBrief = require('./business-brief');
+  const wb = getWorkbenchConfig(cfg);
+  const pub = businessBrief.getPublicPromptSettings(cfg.dataDir);
+  pub.settingsEnabled = wb.settingsEnabled;
+  return pub;
+}
+
+function saveBusinessBriefPromptSettings(cfg, body) {
+  // eslint-disable-next-line global-require
+  const businessBrief = require('./business-brief');
+  const wb = getWorkbenchConfig(cfg);
+  return businessBrief.savePromptSettings(cfg.dataDir, body || {}, {
+    settingsEnabled: wb.settingsEnabled,
+  });
+}
+
+function resetBusinessBriefPromptSettings(cfg) {
+  // eslint-disable-next-line global-require
+  const businessBrief = require('./business-brief');
+  const wb = getWorkbenchConfig(cfg);
+  return businessBrief.resetPromptSettings(cfg.dataDir, {
+    settingsEnabled: wb.settingsEnabled,
+  });
+}
+
 async function testLlmSettingsFromWeb(cfg, body) {
   // eslint-disable-next-line global-require
   const settingsLlm = require('./settings-llm');
@@ -914,4 +942,7 @@ module.exports = {
   getLlmSettings,
   saveLlmSettingsFromWeb,
   testLlmSettingsFromWeb,
+  getBusinessBriefPromptSettings,
+  saveBusinessBriefPromptSettings,
+  resetBusinessBriefPromptSettings,
 };
