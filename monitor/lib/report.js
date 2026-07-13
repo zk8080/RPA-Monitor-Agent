@@ -89,7 +89,9 @@ function selectReportItems(queueItems, cursor, dateKey, scope) {
   if (scope === 'calendar_day' || scope === 'poll_window') {
     const dayQueue = queueItems.filter(
       (q) =>
+        startsWithDate(q.lastFailureAt, dateKey) ||
         startsWithDate(q.lastSeen, dateKey) ||
+        startsWithDate(q.firstFailureAt, dateKey) ||
         startsWithDate(q.firstSeen, dateKey) ||
         startsWithDate(q.diagnosedAt, dateKey),
     );

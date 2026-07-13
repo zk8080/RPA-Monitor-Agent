@@ -28,15 +28,22 @@ function mergeByErrorSignature(items, opts = {}) {
 
   for (const it of items || []) {
     const sig = String(it.errorSignature || '').trim();
-    if (!sig || sig === 'unknown-flow|unknown-error|-') {
-      // 特征过弱：不归并
+    if (
+      !sig ||
+      sig === 'unknown-flow|unknown-error|-' ||
+      sig === 'unknown-flow|超时|-' ||
+      /^unknown-flow\|unknown-error\|/.test(sig)
+    ) {
+      // 特征过弱：不归并（避免「无流程+泛化超时」误合成跨应用根因）
       continue;
     }
     let g = map.get(sig);
     if (!g) {
+      const flowRaw = it.flowName || '';
       g = {
         errorSignature: sig,
-        flowName: it.flowName || '',
+        // 占位符不当作流程名展示
+        flowName: /^(unknown-flow|no-flow)$/i.test(flowRaw) ? '' : flowRaw,
         errorType: it.errorType || '',
         elementName: it.elementName || '',
         rootCauseHint: '',
@@ -49,7 +56,9 @@ function mergeByErrorSignature(items, opts = {}) {
     }
     const n = countFn(it) || 1;
     g.totalCount += n;
-    if (!g.flowName && it.flowName) g.flowName = it.flowName;
+    if (!g.flowName && it.flowName && !/^(unknown-flow|no-flow)$/i.test(it.flowName)) {
+      g.flowName = it.flowName;
+    }
     if (!g.errorType && it.errorType) g.errorType = it.errorType;
     if (!g.elementName && it.elementName) g.elementName = it.elementName;
     if (!g.rootCauseHint && it.lastDiagnosis && it.lastDiagnosis.rootCause) {
@@ -58,8 +67,9 @@ function mergeByErrorSignature(items, opts = {}) {
     if (it.fingerprint && !g.fingerprints.includes(it.fingerprint)) {
       g.fingerprints.push(it.fingerprint);
     }
-    if (!g.lastSeen || String(it.lastSeen || '') > String(g.lastSeen || '')) {
-      g.lastSeen = it.lastSeen || null;
+    const ft = it.lastFailureAt || it.lastSeen || null;
+    if (ft && (!g.lastSeen || String(ft) > String(g.lastSeen || ''))) {
+      g.lastSeen = ft;
     }
 
     const rid = it.robotUuid || 'unknown';

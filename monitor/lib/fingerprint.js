@@ -19,16 +19,19 @@ const URGENT_PATTERNS = [
   /机器人.*(离线|断开)/,
 ];
 
-/** 常见错误类型关键词（长词优先匹配） */
+/** 常见错误类型关键词（长词优先匹配；调度类须在泛化「超时」之前） */
 const ERROR_TYPE_PATTERNS = [
   /匹配到多个元素/,
   /元素未找到|找不到元素|未找到元素/,
   /元素.*(不存在|失效|超时)/,
   /文件被占用|文件正在使用|Sharing violation/i,
   /文件不存在|找不到文件|No such file/i,
-  /超时|timeout/i,
+  /任务等待运行超时/,
+  /未分配空闲机器人/,
+  /机器人未连接|机器人断连/,
   /登录失败|鉴权失败/,
   /断连|未连接/,
+  /超时|timeout/i,
   /网络异常|连接失败|ECONNREFUSED/i,
   /权限不足|拒绝访问|Access is denied/i,
   /Excel.*(打开|占用|损坏)/i,
@@ -110,6 +113,20 @@ function parseRemark(remark) {
     raw.match(/(?:文件|路径)\s*[:：]?\s*([^\s,，;；]+\.\w+)/);
   if (!elementName && fileMatch) elementName = fileMatch[1].split(/[/\\]/).pop();
 
+  // 调度/平台类 remark 常无「在【流程】中」：用「原因：…」作区分特征，避免全变成 unknown-flow|超时
+  const reasonMatch = raw.match(/原因\s*[:：]\s*([^\n\r。；;]+)/);
+  if (reasonMatch) {
+    const reason = reasonMatch[1].trim();
+    if (reason && !/^\d{1,4}$/.test(reason)) {
+      if (!elementName) elementName = reason.slice(0, 40);
+      // 泛化「超时」时，用更具体原因抬高 errorType 可读性
+      if (!errorType || errorType === '超时' || /^timeout$/i.test(errorType)) {
+        if (/未分配空闲/.test(reason)) errorType = '未分配空闲机器人';
+        else if (/未连接|断连|离线/.test(reason)) errorType = '机器人未连接';
+        else if (reason.length <= 24) errorType = reason;
+      }
+    }
+  }
 
   return { flowName, lineNumber, errorType, elementName, rawRemark: raw };
 }
@@ -142,9 +159,25 @@ function parseLogs(logs) {
  * 稳定指纹字符串（短 hash，便于文件名）
  * @param {{ robotUuid: string, flowName: string, errorType: string, elementName: string }} parts
  */
+/**
+ * 无流程名时的指纹前缀：调度类用「调度层」，其余 unknown-flow
+ * （unknown-flow 表示解析不到子流程，不是影刀里的真实流程名）
+ */
+function flowKeyPart(flowName, errorType, elementName, rawRemark) {
+  const flow = normalizeFeature(flowName || '');
+  if (flow) return flow;
+  const blob = `${errorType || ''} ${elementName || ''} ${rawRemark || ''}`;
+  if (/任务等待|未分配空闲|机器人未连接|机器人断连|调度|未连接/.test(blob)) {
+    return '调度层';
+  }
+  return 'unknown-flow';
+}
+
 function makeFingerprintKey(parts) {
   const robot = parts.robotUuid || 'unknown-robot';
-  const flow = normalizeFeature(parts.flowName || 'unknown-flow') || 'unknown-flow';
+  const flow =
+    flowKeyPart(parts.flowName, parts.errorType, parts.elementName, parts.rawRemark) ||
+    'unknown-flow';
   const err = normalizeFeature(parts.errorType || 'unknown-error') || 'unknown-error';
   const el = normalizeFeature(parts.elementName || '') || '-';
   const material = [robot, flow, err, el].join('|').toLowerCase();
@@ -155,10 +188,12 @@ function makeFingerprintKey(parts) {
 }
 
 /**
- * 跨应用归并用特征（不含 robotUuid）— 字段预留，M3 再用
+ * 跨应用归并用特征（不含 robotUuid）
  */
 function makeErrorSignature(parts) {
-  const flow = normalizeFeature(parts.flowName || '') || 'unknown-flow';
+  const flow =
+    flowKeyPart(parts.flowName, parts.errorType, parts.elementName, parts.rawRemark) ||
+    'unknown-flow';
   const err = normalizeFeature(parts.errorType || '') || 'unknown-error';
   const el = normalizeFeature(parts.elementName || '') || '-';
   return [flow, err, el].join('|').toLowerCase();
@@ -200,13 +235,14 @@ function buildFingerprint(input = {}) {
     !input.logs?.length && (!flowName || !errorType) && Boolean(input.remark || input.jobUuid);
 
   const robotUuid = input.robotUuid || '';
-  const parts = { robotUuid, flowName, errorType, elementName };
+  const parts = { robotUuid, flowName, errorType, elementName, rawRemark };
 
   return {
     fingerprint: makeFingerprintKey(parts),
     errorSignature: makeErrorSignature(parts),
     robotUuid,
     robotName: input.robotName || '',
+    // flowName 保持真实解析结果（可为空）；指纹前缀可能用「调度层」
     flowName,
     lineNumber,
     errorType,
@@ -234,6 +270,7 @@ module.exports = {
   normalizeFeature,
   makeFingerprintKey,
   makeErrorSignature,
+  flowKeyPart,
   isFailedStatus,
   isUrgentRemark,
 };

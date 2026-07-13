@@ -143,7 +143,11 @@ async function pollOnce(cfg, options = {}) {
 
       const existed = memory.loadQueueItem(dataDir, fp.fingerprint);
       const prevJobs = existed?.sampleJobUuids ? [...existed.sampleJobUuids] : [];
-      const item = memory.upsertQueueItem(dataDir, fp, { jobUuid: job.jobUuid });
+      const failureAt = memory.pickJobFailureAt(job);
+      const item = memory.upsertQueueItem(dataDir, fp, {
+        jobUuid: job.jobUuid,
+        failureAt: failureAt || undefined,
+      });
       if (existed) stats.updated += 1;
       else stats.enqueued += 1;
 
@@ -176,7 +180,9 @@ async function pollOnce(cfg, options = {}) {
           robotName: item.robotName,
           jobUuid: job.jobUuid,
           status: job.status,
-          triggerTime: job.triggerTime || job.startTime || null,
+          // 真实失败时间（ISO）；兼容字段 triggerTime 保留原始/归一后值
+          triggerTime: failureAt || job.triggerTime || job.startTime || null,
+          failureAt: failureAt || null,
           count: 1,
         });
       } else if (fp.fingerprint) {

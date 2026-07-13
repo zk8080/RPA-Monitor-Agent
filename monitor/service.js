@@ -62,14 +62,43 @@ function printHelp() {
 `);
 }
 
+const fs = require('fs');
+const path = require('path');
+
+let logFilePath = null;
+
+function initFileLog(dataDir) {
+  try {
+    const dir = path.join(dataDir || path.join(__dirname, '..', 'data'), 'logs');
+    fs.mkdirSync(dir, { recursive: true });
+    // local calendar day for filename (match deploy scripts)
+    const local = new Date();
+    const y = local.getFullYear();
+    const m = String(local.getMonth() + 1).padStart(2, '0');
+    const d = String(local.getDate()).padStart(2, '0');
+    logFilePath = path.join(dir, `service-${y}${m}${d}.log`);
+  } catch {
+    logFilePath = null;
+  }
+}
+
 function log(msg) {
   const ts = new Date().toISOString();
-  console.log(`[${ts}] ${msg}`);
+  const line = `[${ts}] ${msg}`;
+  console.log(line);
+  if (logFilePath) {
+    try {
+      fs.appendFileSync(logFilePath, `${line}\n`, 'utf8');
+    } catch {
+      /* ignore disk errors */
+    }
+  }
 }
 
 async function runPipeline(cfg, opts, label = 'cycle') {
   log(`▶ ${label}: poll`);
-  const pollResult = await pollOnce(cfg, { maxPages: 3, enrichLogs: true });
+  // 翻页上限走配置 pollMaxPages（默认 50），不再写死 3 页≈150 条
+  const pollResult = await pollOnce(cfg, { enrichLogs: true });
   log(
     `  poll done scanned=${pollResult.stats.scanned} failed=${pollResult.stats.failed} ` +
       `new=${pollResult.stats.enqueued} updated=${pollResult.stats.updated}` +
@@ -132,6 +161,8 @@ async function runPipeline(cfg, opts, label = 'cycle') {
     process.exit(1);
   }
 
+  initFileLog(cfg.dataDir);
+
   const lock = acquireLock(cfg.dataDir);
   if (!lock.ok) {
     console.error(`❌ 已有实例在运行 (pid=${lock.pid})。若进程已死，删除 data/service.pid 后重试。`);
@@ -182,11 +213,15 @@ async function runPipeline(cfg, opts, label = 'cycle') {
         `diagnoseCron=${cfg.diagnoseCron} reportCron=${cfg.reportCron}`,
     );
 
-    // 启动先跑一轮
-    await runPipeline(cfg, opts, 'boot');
-    state.lastPollAt = new Date().toISOString();
-    if (opts.diagnose) state.lastDiagnoseAt = state.lastPollAt;
-    if (opts.report) state.lastReportAt = state.lastPollAt;
+    // 启动先跑一轮（失败只记日志，不拖垮 HTTP / 常驻）
+    try {
+      await runPipeline(cfg, opts, 'boot');
+      state.lastPollAt = new Date().toISOString();
+      if (opts.diagnose) state.lastDiagnoseAt = state.lastPollAt;
+      if (opts.report) state.lastReportAt = state.lastPollAt;
+    } catch (e) {
+      log(`boot error (service keeps running): ${e && e.message ? e.message : e}`);
+    }
 
     const intervalMs = Math.max(1, cfg.pollIntervalMinutes || 15) * 60 * 1000;
     timer = setInterval(async () => {
@@ -226,6 +261,15 @@ async function runPipeline(cfg, opts, label = 'cycle') {
     }, intervalMs);
 
     log(`interval armed every ${cfg.pollIntervalMinutes} minutes (Ctrl+C 退出)`);
+
+    // 未捕获异常/拒绝：记日志，尽量保持常驻（避免工作台端口突然消失）
+    process.on('uncaughtException', (err) => {
+      log(`uncaughtException: ${err && err.stack ? err.stack : err}`);
+    });
+    process.on('unhandledRejection', (reason) => {
+      const msg = reason && reason.stack ? reason.stack : String(reason);
+      log(`unhandledRejection: ${msg}`);
+    });
   } catch (e) {
     console.error(`❌ service 失败: ${e.message}`);
     releaseLock(cfg.dataDir);

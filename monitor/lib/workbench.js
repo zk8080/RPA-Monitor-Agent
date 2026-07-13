@@ -50,6 +50,12 @@ function listOpenAgents(cfg) {
  * @param {object[]} items
  * @returns {Map<string, { robotUuid, robotName, failureCount, undiagnosedCount, lastSeen, items }>}
  */
+/** 展示用失败时间：优先 lastFailureAt（真实失败），兼容旧 queue 仅 lastSeen */
+function failureTimeOf(it) {
+  if (!it) return null;
+  return it.lastFailureAt || it.lastSeen || it.firstFailureAt || it.firstSeen || null;
+}
+
 function aggregateFailuresByRobot(items) {
   const map = new Map();
   for (const it of items || []) {
@@ -69,8 +75,9 @@ function aggregateFailuresByRobot(items) {
     row.failureCount += 1;
     if (!it.diagnosed) row.undiagnosedCount += 1;
     if (!row.robotName && it.robotName) row.robotName = it.robotName;
-    if (!row.lastSeen || String(it.lastSeen || '') > String(row.lastSeen || '')) {
-      row.lastSeen = it.lastSeen || null;
+    const ft = failureTimeOf(it);
+    if (ft && (!row.lastSeen || String(ft) > String(row.lastSeen || ''))) {
+      row.lastSeen = ft;
     }
     row.items.push(it);
   }
@@ -79,7 +86,7 @@ function aggregateFailuresByRobot(items) {
 
 function listQueueSorted(dataDir) {
   const items = memory.listQueueItems(dataDir);
-  items.sort((a, b) => String(b.lastSeen || '').localeCompare(String(a.lastSeen || '')));
+  items.sort((a, b) => String(failureTimeOf(b) || '').localeCompare(String(failureTimeOf(a) || '')));
   return items;
 }
 
@@ -275,6 +282,7 @@ function enrichFailureItem(it, cfg) {
     rawRemark: it.rawRemark,
     suggestion: it.lastDiagnosis && it.lastDiagnosis.suggestion,
   });
+  const failAt = failureTimeOf(it);
   return {
     fingerprint: it.fingerprint,
     flowName: it.flowName,
@@ -283,8 +291,12 @@ function enrichFailureItem(it, cfg) {
     rawRemark: it.rawRemark,
     diagnosed: !!it.diagnosed,
     occurrenceCount: it.occurrenceCount,
-    lastSeen: it.lastSeen,
-    firstSeen: it.firstSeen,
+    // Web「最近/失败时间」用真实失败时间
+    lastSeen: failAt,
+    firstSeen: it.firstFailureAt || it.firstSeen || failAt,
+    lastFailureAt: it.lastFailureAt || failAt,
+    firstFailureAt: it.firstFailureAt || it.firstSeen || null,
+    lastPolledAt: it.lastPolledAt || null,
     kbId: it.kbId || null,
     fixStatus: it.fixStatus || null,
     lastPatchId: it.lastPatchId || null,
@@ -758,6 +770,7 @@ function buildHealth(cfg, state = {}) {
 module.exports = {
   getWorkbenchConfig,
   aggregateFailuresByRobot,
+  failureTimeOf,
   buildOverview,
   listAppsWithStats,
   getAppDetail,

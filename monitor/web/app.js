@@ -44,15 +44,26 @@
     return `…${s.slice(-(keep - 1))}`;
   }
 
-  function relTime(iso) {
+  /** 展示绝对本地时间 yyyy-MM-dd HH:mm:ss（不再用「N 小时前」） */
+  function formatTime(iso) {
     if (!iso) return '—';
-    const t = Date.parse(iso);
-    if (Number.isNaN(t)) return String(iso).slice(0, 19);
-    const sec = Math.round((Date.now() - t) / 1000);
-    if (sec < 60) return `${Math.max(sec, 0)} 秒前`;
-    if (sec < 3600) return `${Math.floor(sec / 60)} 分钟前`;
-    if (sec < 86400) return `${Math.floor(sec / 3600)} 小时前`;
-    return `${Math.floor(sec / 86400)} 天前`;
+    const raw = String(iso).trim();
+    const t = Date.parse(raw);
+    if (Number.isNaN(t)) {
+      // 已是影刀本地串等：去掉 T/Z 截断展示
+      return raw.replace('T', ' ').replace(/\.\d{3}Z?$/, '').replace(/Z$/, '').slice(0, 19);
+    }
+    const d = new Date(t);
+    const pad = (n) => String(n).padStart(2, '0');
+    return (
+      `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` +
+      `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+    );
+  }
+
+  // 兼容旧调用名
+  function relTime(iso) {
+    return formatTime(iso);
   }
 
   function loadingHtml(label = '加载中…') {
@@ -1518,10 +1529,21 @@
         <h2>跨应用根因 <span class="meta">${cross.length}</span></h2>
         <div class="list">${cross
           .map((g) => {
+            // unknown-flow / no-flow 是指纹占位，不是真实流程名；不展示内部 errorSignature
+            const flowLabel =
+              g.flowName && !/^(unknown-flow|no-flow|调度层)$/i.test(String(g.flowName).trim())
+                ? g.flowName
+                : '';
             const title =
               g.rootCauseHint ||
-              [g.flowName, g.errorType, g.elementName].filter(Boolean).join(' · ') ||
-              g.errorSignature;
+              [flowLabel, g.errorType, g.elementName].filter(Boolean).join(' · ') ||
+              String(g.errorSignature || '')
+                .replace(/^unknown-flow\|/i, '')
+                .replace(/^no-flow\|/i, '')
+                .replace(/^调度层\|/i, '')
+                .replace(/\|-/g, '')
+                .replace(/\|/g, ' · ') ||
+              '跨应用同类失败';
             const apps = (g.affectedApps || [])
               .map((a) => esc(a.robotName || a.robotUuid))
               .join('、');
@@ -1533,7 +1555,6 @@
               <div class="item-main">
                 <div class="item-title">${esc(title)}</div>
                 <div class="item-sub wrap">${esc(g.appCount)} 个应用 · ${esc(apps)}</div>
-                <div class="item-sub mono">${esc(g.errorSignature)}</div>
               </div>
               <div class="item-side">
                 <div class="badges"><span class="badge danger">${esc(g.totalCount)} 条</span></div>
@@ -1544,7 +1565,6 @@
               <div class="item-main">
                 <div class="item-title">${esc(title)}</div>
                 <div class="item-sub wrap">${esc(g.appCount)} 个应用 · ${esc(apps)}</div>
-                <div class="item-sub mono">${esc(g.errorSignature)}</div>
               </div>
               <div class="item-side">
                 <div class="badges"><span class="badge danger">${esc(g.totalCount)} 条</span></div>

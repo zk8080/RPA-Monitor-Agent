@@ -50,6 +50,31 @@ assert.strictEqual(a.errorSignature, differentRobot.errorSignature, '跨 app err
 assert.ok(isUrgentRemark('机器人断连，请检查客户端'));
 assert.ok(!isUrgentRemark(REMARK));
 
+// 调度层 remark：无「在【流程】中」，不应只剩 unknown-flow|超时
+const dispatch1 = buildFingerprint({
+  robotUuid: 'r-dispatch-1',
+  robotName: 'A',
+  remark: '任务等待运行超时。原因：机器人未连接',
+});
+assert.ok(!dispatch1.flowName, '调度失败无真实流程名');
+assert.ok(
+  dispatch1.errorType.includes('未连接') || dispatch1.elementName.includes('未连接'),
+  '应解析出未连接原因',
+);
+assert.ok(dispatch1.fingerprint.startsWith('调度层_'), `fp=${dispatch1.fingerprint}`);
+assert.ok(dispatch1.errorSignature.includes('调度层'), dispatch1.errorSignature);
+
+const dispatch2 = buildFingerprint({
+  robotUuid: 'r-dispatch-2',
+  robotName: 'B',
+  remark: '任务等待运行超时。原因：未分配空闲机器人',
+});
+assert.notStrictEqual(
+  dispatch1.errorSignature,
+  dispatch2.errorSignature,
+  '不同调度原因应拆成不同 errorSignature，避免误归并',
+);
+
 // 日志补全
 const fromLogs = buildFingerprint({
   robotUuid: 'r1',
