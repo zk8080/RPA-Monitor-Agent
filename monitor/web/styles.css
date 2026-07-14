@@ -779,6 +779,25 @@ a.list-item:hover .item-go,
   align-items: center;
   flex-shrink: 0;
 }
+.handoff-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-2);
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+.handoff-toggle input {
+  margin: 0;
+  accent-color: var(--accent);
+}
+.handoff-hint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-3);
+}
 
 /* Split button: 在 Agent 打开 + 下拉 */
 .split-btn {

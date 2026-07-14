@@ -14,6 +14,7 @@ const { classifyFix, canPreviewFix, describeFixGuidance } = require('./triage');
 const { runSkill } = require('./agent-runner');
 const { buildDailyReport, toDateKey } = require('./report');
 const { mergeByErrorSignature } = require('./merge');
+const handoff = require('./handoff');
 
 /** @type {{ at: number, apps: object, queueStats: Map } | null} */
 let memCache = null;
@@ -35,6 +36,8 @@ function getWorkbenchConfig(cfg = {}) {
     actionsEnabled: w.actionsEnabled !== false,
     // S26：Web 配置 LLM
     settingsEnabled: w.settingsEnabled !== false,
+    // S27a：交接包默认是否附带诊断（仍可被查询参数覆盖）
+    handoffIncludeDiagnose: w.handoffIncludeDiagnose === true,
   };
 }
 
@@ -792,6 +795,106 @@ function getFindingDetail(fingerprint, cfg) {
   };
 }
 
+/**
+ * S27a：失败修复交接提示词（瘦身；诊断 opt-in）
+ * @param {string} fingerprint
+ * @param {object} cfg
+ * @param {{ includeDiagnose?: boolean|string }} [opts]
+ */
+function getFindingHandoff(fingerprint, cfg, opts = {}) {
+  const detail = getFindingDetail(fingerprint, cfg);
+  if (!detail.ok) return detail;
+
+  const wb = getWorkbenchConfig(cfg);
+  const includeDiagnose =
+    opts.includeDiagnose != null
+      ? handoff.truthyFlag(opts.includeDiagnose)
+      : wb.handoffIncludeDiagnose === true;
+
+  const f = detail.finding || {};
+  const d = detail.diagnosis || {};
+  const k = detail.kb || {};
+  const g = detail.guidance || {};
+  const triage = detail.triage || {};
+
+  const ctx = {
+    mode: 'fix',
+    name: detail.appName || f.robotName || '',
+    robotUuid: f.robotUuid || '',
+    xbotDir: detail.xbotDir || '',
+    fingerprint,
+    flowName: f.flowName,
+    lineNumber: f.lineNumber,
+    errorType: f.errorType,
+    rawRemark: f.rawRemark,
+    guidanceTitle: g.title,
+    fixClass: triage.fixClass || g.fixClass,
+    fixability: triage.fixability || g.fixability,
+    rootCause: d.rootCause || k.rootCause,
+    suggestion: d.suggestion || k.solution,
+    includeDiagnose,
+  };
+
+  const markdown = handoff.buildFixPrompt(ctx);
+  const measure = handoff.measurePrompt(markdown);
+  return {
+    ok: true,
+    mode: 'fix',
+    markdown,
+    summary: `修：${ctx.name || fingerprint} · ${ctx.errorType || '失败'}`,
+    includeDiagnose,
+    meta: {
+      fingerprint,
+      robotUuid: ctx.robotUuid || null,
+      appName: ctx.name || null,
+      xbotDir: ctx.xbotDir || null,
+      flowName: ctx.flowName || null,
+      lineNumber: ctx.lineNumber != null ? ctx.lineNumber : null,
+      errorType: ctx.errorType || null,
+      fixClass: ctx.fixClass || null,
+      fixability: ctx.fixability || null,
+    },
+    ...measure,
+  };
+}
+
+/**
+ * S27a：应用开发/维护交接提示词
+ * @param {string} robotUuid
+ * @param {object} cfg
+ * @param {{ taskNote?: string }} [opts]
+ */
+function getAppHandoff(robotUuid, cfg, opts = {}) {
+  if (!robotUuid) {
+    return { ok: false, code: 'missing_robot', message: '缺少 robotUuid' };
+  }
+  const detail = getAppDetail(robotUuid, cfg);
+  if (!detail.ok) return detail;
+
+  const ctx = {
+    mode: 'develop',
+    name: detail.name || robotUuid,
+    robotUuid,
+    xbotDir: detail.xbotDir || '',
+    taskNote: opts.taskNote || '',
+  };
+  const markdown = handoff.buildDevelopPrompt(ctx);
+  const measure = handoff.measurePrompt(markdown);
+  return {
+    ok: true,
+    mode: 'develop',
+    markdown,
+    summary: `开发：${ctx.name}`,
+    includeDiagnose: false,
+    meta: {
+      robotUuid,
+      appName: ctx.name || null,
+      xbotDir: ctx.xbotDir || null,
+    },
+    ...measure,
+  };
+}
+
 function listPatchesForWorkbench(cfg, opts = {}) {
   let list = patchLib.listPatches(cfg.dataDir);
   if (opts.fingerprint) list = list.filter((p) => p.fingerprint === opts.fingerprint);
@@ -1517,6 +1620,8 @@ module.exports = {
   invalidateAppsCache,
   getAppsBundle,
   getFindingDetail,
+  getFindingHandoff,
+  getAppHandoff,
   listPatchesForWorkbench,
   getPatchDetail,
   runWorkbenchAction,

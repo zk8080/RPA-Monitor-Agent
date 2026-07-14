@@ -93,10 +93,11 @@ npm start
 |------|------|
 | 总览 | 本机应用数、queue、runtime、问题应用 |
 | 应用列表 | ShadowBot 本机扫描 + 失败计数 |
-| 应用详情 | 流程 understand（rpa-skill）、打开文件夹、相关失败 |
+| 应用详情 | 流程 understand（rpa-skill）、打开文件夹、相关失败、**复制开发提示** |
+| 问题详情 | 诊断 / 预览修复、**复制瘦身修复提示**（可选含诊断）、打开 Coding Agent |
 
-自检：`npm run test:workbench`  
-设计：[WEB-WORKBENCH-MVP.md](WEB-WORKBENCH-MVP.md)
+自检：`npm run test:workbench` · `npm run test:handoff`  
+设计：[WEB-WORKBENCH-MVP.md](WEB-WORKBENCH-MVP.md) · 交接包见 [TECH-DESIGN.md](TECH-DESIGN.md) §15.3
 
 ## 当前进度
 
@@ -112,6 +113,7 @@ npm start
 | **S10b** 跨应用归并 | ✅ errorSignature ≥2 app；弱 unknown-flow 不归并；卡片不展示内部 signature |
 | queue 失败时间 | ✅ 影刀 job 时间（非 poll 墙钟）；工作台绝对本地时间 |
 | **S26** 工作台配置 LLM | ✅ `data/settings.llm.json` + 设置页；env 优先 |
+| **S27a** Coding Agent 瘦身交接包 | ✅ `lib/handoff.js`；默认路径+现象；诊断 opt-in |
 | S10c+ 后续 | 见下表 |
 | service 自动 apply | **永不默认** |
 

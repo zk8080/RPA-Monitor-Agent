@@ -267,6 +267,16 @@ const state = { startedAt: Date.now(), lastPollAt: null, lastDiagnoseAt: null, l
   const findingMiss = await request(server, 'GET', '/api/findings/no-such-fp');
   assert.strictEqual(findingMiss.status, 404);
 
+  // S27a handoff routes
+  const handoffMiss = await request(server, 'GET', '/api/findings/no-such-fp/handoff');
+  assert.strictEqual(handoffMiss.status, 404);
+  const appHandoff = await request(server, 'GET', '/api/apps/no-such-robot/handoff');
+  assert.strictEqual(appHandoff.status, 200);
+  const appHandoffJson = JSON.parse(appHandoff.body);
+  assert.strictEqual(appHandoffJson.ok, true);
+  assert.strictEqual(appHandoffJson.mode, 'develop');
+  assert.ok(String(appHandoffJson.markdown || '').includes('开发'));
+
   const patches = await request(server, 'GET', '/api/patches');
   assert.strictEqual(patches.status, 200);
   assert.strictEqual(JSON.parse(patches.body).ok, true);

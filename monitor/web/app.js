@@ -100,122 +100,25 @@
   }
 
   /**
-   * Coding Agent 交接文案
-   * - mode: 'fix'     诊后修复（失败详情 / 列表「复制给 Agent」）
-   * - mode: 'develop'  日常开发 / 理解与维护（应用详情）
-   * 原则：问题包 + 打开工程 + 用 rpa-skill 理解；不 dump 全流程 JSON
-   *
-   * @param {{
-   *   mode?: 'fix'|'develop',
-   *   name?: string,
-   *   xbotDir?: string,
-   *   robotUuid?: string,
-   *   fingerprint?: string,
-   *   flowName?: string,
-   *   lineNumber?: string|number,
-   *   errorType?: string,
-   *   rawRemark?: string,
-   *   rootCause?: string,
-   *   suggestion?: string,
-   *   guidanceTitle?: string,
-   *   fixClass?: string,
-   *   fixability?: string,
-   *   taskNote?: string,
-   * }} ctx
+   * S27a：从服务端拉取瘦身交接提示词（业务在 lib/handoff.js）
+   * fix 默认不含诊断；includeDiagnose=true 时附带 Monitor 判断。
+   * @param {{ mode?: 'fix'|'develop', fingerprint?: string, robotUuid?: string, includeDiagnose?: boolean }} opts
+   * @returns {Promise<{ ok: boolean, markdown?: string, message?: string, includeDiagnose?: boolean }>}
    */
-  function buildAgentPrompt(ctx = {}) {
-    // 有指纹默认 fix；显式 mode 优先
-    const effective =
-      ctx.mode === 'develop'
-        ? 'develop'
-        : ctx.mode === 'fix' || ctx.fingerprint
-          ? 'fix'
-          : 'develop';
-
-    if (effective === 'develop') {
-      return buildDevelopPrompt(ctx);
+  async function fetchHandoff(opts = {}) {
+    try {
+      if (opts.mode === 'fix' || opts.fingerprint) {
+        const fp = opts.fingerprint;
+        if (!fp) return { ok: false, message: '缺少 fingerprint' };
+        const q = opts.includeDiagnose ? '?includeDiagnose=1' : '';
+        return await api(`/api/findings/${encodeURIComponent(fp)}/handoff${q}`);
+      }
+      const robotUuid = opts.robotUuid;
+      if (!robotUuid) return { ok: false, message: '缺少 robotUuid' };
+      return await api(`/api/apps/${encodeURIComponent(robotUuid)}/handoff`);
+    } catch (e) {
+      return { ok: false, message: e.message || String(e) };
     }
-    return buildFixPrompt(ctx);
-  }
-
-  function buildDevelopPrompt(ctx = {}) {
-    const lines = [
-      '# 任务 · 影刀 RPA 开发 / 维护',
-      '当前工作区应已是该应用的 xbot_robot 目录。请先理解流程结构，再按我的需求改代码；写盘前说明影响面并确认。',
-      '',
-      '## 工程',
-    ];
-    if (ctx.name) lines.push(`- 应用：${ctx.name}`);
-    if (ctx.robotUuid) lines.push(`- robotUuid：${ctx.robotUuid}`);
-    if (ctx.xbotDir) lines.push(`- 路径：${ctx.xbotDir}`);
-    if (ctx.taskNote) {
-      lines.push('', '## 本次需求', String(ctx.taskNote).slice(0, 800));
-    }
-
-    // 日常开发不附带失败队列 / 备注；失败现场只走 fix 模式
-
-    lines.push(
-      '',
-      '## 建议工作方式',
-      '1. 用 rpa skill 理解本项目：`/rpa understand`（结构）或 `/rpa inspect`（风险）',
-      '2. 对照 package.json / .dev 下流程与 Python 模块，理清主流程与子流程调用',
-      '3. 按需求做最小改动；生成或改写 .flow.json 时遵守 rpa skill 的确认门槛（IRON LAW）',
-      '4. 不要整库重写；不要假设其他未打开的应用目录',
-      '',
-      '## 不要做',
-      '- 不要把整份 .flow.json 再贴回对话当「理解结果」；以磁盘与 rpa skill 为准',
-      '- 不要整库重写；优先局部、可确认的改动',
-    );
-    return lines.join('\n');
-  }
-
-  function buildFixPrompt(ctx = {}) {
-    const lines = [
-      '# 任务 · 影刀 RPA 失败修复',
-      '当前工作区应已是该应用的 xbot_robot 目录。请根据下方「失败现场」定位并修复；先理解再改，写盘前说明影响面。',
-      '',
-      '## 工程',
-    ];
-    if (ctx.name) lines.push(`- 应用：${ctx.name}`);
-    if (ctx.robotUuid) lines.push(`- robotUuid：${ctx.robotUuid}`);
-    if (ctx.xbotDir) lines.push(`- 路径：${ctx.xbotDir}`);
-
-    lines.push('', '## 失败现场（来自 RPA Monitor，请优先对齐）');
-    if (ctx.fingerprint) lines.push(`- 指纹：${ctx.fingerprint}`);
-    if (ctx.flowName) {
-      const loc =
-        ctx.lineNumber != null && ctx.lineNumber !== ''
-          ? `${ctx.flowName}  L${ctx.lineNumber}`
-          : ctx.flowName;
-      lines.push(`- 流程位置：${loc}`);
-    }
-    if (ctx.errorType) lines.push(`- 错误类型：${ctx.errorType}`);
-    if (ctx.rawRemark) lines.push(`- 原始备注：${String(ctx.rawRemark).slice(0, 600)}`);
-    if (ctx.guidanceTitle || ctx.fixClass) {
-      lines.push(
-        `- 分诊：${[ctx.guidanceTitle, ctx.fixClass, ctx.fixability].filter(Boolean).join(' / ')}`,
-      );
-    }
-
-    if (ctx.rootCause || ctx.suggestion) {
-      lines.push('', '## Monitor 已有判断（可参考，需你核实）');
-      if (ctx.rootCause) lines.push(`- 根因：${String(ctx.rootCause).slice(0, 500)}`);
-      if (ctx.suggestion) lines.push(`- 建议：${String(ctx.suggestion).slice(0, 500)}`);
-    }
-
-    lines.push(
-      '',
-      '## 建议工作方式',
-      '1. 用 rpa skill 理解本项目：`/rpa understand`；若需结构风险可 `/rpa inspect`',
-      '2. 打开失败相关的 .flow.json / py，对照流程名与行号（行号可能对应块序号，以实际文件为准）',
-      '3. 给出最小改动方案；确认后再改文件',
-      '4. 修复后说明如何回归验证（重跑任务 / 看同指纹是否再出现）',
-      '',
-      '## 不要做',
-      '- 不要要求用户再粘贴整份流程 JSON；工程已在工作区，用 skill 或读文件理解',
-      '- 不要整库重写；优先局部修复',
-    );
-    return lines.join('\n');
   }
 
   function setActiveHandoff({ path = '', agentPrompt = '' } = {}) {
@@ -416,7 +319,18 @@
   }
 
   /**
-   * 主路径交接条：路径可点复制；唯一主按钮 = 在 Agent 打开（自动带提示词）
+   * 主路径交接条：路径可点复制；复制瘦身提示词；在 Agent 打开（自动带提示词）
+   * @param {{
+   *   xbotDir?: string,
+   *   agentPrompt?: string,
+   *   pathLabel?: string,
+   *   compact?: boolean,
+   *   robotUuid?: string,
+   *   agents?: object[]|null,
+   *   showCopyPrompt?: boolean,
+   *   showDiagnoseToggle?: boolean,
+   *   includeDiagnose?: boolean,
+   * }} opts
    */
   function handoffBarHtml({
     xbotDir = '',
@@ -425,6 +339,9 @@
     compact = false,
     robotUuid = '',
     agents = null,
+    showCopyPrompt = true,
+    showDiagnoseToggle = false,
+    includeDiagnose = false,
   } = {}) {
     const path = String(xbotDir || '');
     const prompt = String(agentPrompt || '');
@@ -433,6 +350,16 @@
       robotUuid && path && agents && agents.length
         ? openAgentMenuHtml({ robotUuid, xbotDir: path, agents, prompt })
         : '';
+    const copyPromptBtn =
+      showCopyPrompt && prompt
+        ? `<button type="button" class="btn sm ghost" id="btn-copy-handoff" title="复制给 Coding Agent 的瘦身提示词">复制提示</button>`
+        : '';
+    const diagToggle = showDiagnoseToggle
+      ? `<label class="handoff-toggle" title="默认不附带，避免给 Coding Agent 噪音">
+          <input type="checkbox" id="chk-handoff-diagnose" ${includeDiagnose ? 'checked' : ''}/>
+          含诊断
+        </label>`
+      : '';
     return `<div class="handoff ${compact ? 'compact' : ''}" role="region" aria-label="交给 Coding Agent">
       <div class="handoff-label">${esc(pathLabel)}</div>
       <div class="handoff-row">
@@ -443,8 +370,13 @@
               )}</button>`
             : `<div class="handoff-path muted">未解析到 xbot_robot 路径</div>`
         }
-        ${openMenu ? `<div class="handoff-actions">${openMenu}</div>` : ''}
+        <div class="handoff-actions">
+          ${diagToggle}
+          ${copyPromptBtn}
+          ${openMenu || ''}
+        </div>
       </div>
+      <p class="hint handoff-hint">交接提示默认精简（路径 + 现象）；打开 Agent 时会自动复制到剪贴板。</p>
     </div>`;
   }
 
@@ -2608,12 +2540,8 @@
 
     pushRecentApp(robotUuid, detail.name || robotUuid);
 
-    const agentPrompt = buildAgentPrompt({
-      mode: 'develop',
-      name: detail.name || robotUuid,
-      xbotDir: detail.xbotDir || '',
-      robotUuid,
-    });
+    const handoffRes = await fetchHandoff({ mode: 'develop', robotUuid });
+    const agentPrompt = handoffRes.ok ? handoffRes.markdown || '' : '';
     setActiveHandoff({ path: detail.xbotDir || '', agentPrompt });
 
     setHeader(
@@ -2630,6 +2558,7 @@
         pathLabel: '本地路径',
         robotUuid,
         agents,
+        showCopyPrompt: true,
       })}
       <div id="open-hint" class="hint mb"></div>
 
@@ -2659,6 +2588,17 @@
     `;
 
     bindCopyButtons(content);
+    const copyHandoffApp = $('#btn-copy-handoff');
+    if (copyHandoffApp) {
+      copyHandoffApp.onclick = async () => {
+        if (!agentPrompt) {
+          toast(handoffRes.message || '暂无交接提示');
+          return;
+        }
+        const ok = await copyText(agentPrompt, '开发提示已复制');
+        if (ok) flashCopied(copyHandoffApp);
+      };
+    }
     bindOpenAgentControls(content, { robotUuid, prompt: agentPrompt });
 
     const tabOrder = ['overview', 'flow', 'impl', 'failures'];
@@ -2797,22 +2737,14 @@
 
     if (robotUuid) pushRecentApp(robotUuid, appName);
 
-    const agentPrompt = buildAgentPrompt({
+    const hasDiagText = !!(d.rootCause || k.rootCause || d.suggestion || k.solution);
+    let includeDiagnose = false;
+    let handoffRes = await fetchHandoff({
       mode: 'fix',
-      name: appName,
-      xbotDir,
-      robotUuid,
       fingerprint,
-      flowName: f.flowName,
-      lineNumber: f.lineNumber,
-      errorType: f.errorType,
-      rawRemark: f.rawRemark,
-      rootCause: d.rootCause || k.rootCause,
-      suggestion: d.suggestion || k.solution,
-      guidanceTitle: g && g.title,
-      fixClass: triage.fixClass || (g && g.fixClass),
-      fixability: triage.fixability || (g && g.fixability),
+      includeDiagnose,
     });
+    let agentPrompt = handoffRes.ok ? handoffRes.markdown || '' : '';
     setActiveHandoff({ path: xbotDir, agentPrompt });
 
     setHeader(
@@ -2835,6 +2767,9 @@
         pathLabel: '本地路径',
         robotUuid,
         agents,
+        showCopyPrompt: true,
+        showDiagnoseToggle: hasDiagText,
+        includeDiagnose,
       })}
       <div id="open-hint" class="hint mb"></div>
 
@@ -2906,7 +2841,38 @@
     `;
 
     bindCopyButtons(content);
-    bindOpenAgentControls(content, { robotUuid, prompt: agentPrompt });
+
+    function bindFindingHandoffControls() {
+      const copyBtn = $('#btn-copy-handoff');
+      if (copyBtn) {
+        copyBtn.onclick = async () => {
+          if (!agentPrompt) {
+            toast('暂无交接提示');
+            return;
+          }
+          const ok = await copyText(agentPrompt, '修复提示已复制');
+          if (ok) flashCopied(copyBtn);
+        };
+      }
+      const chk = $('#chk-handoff-diagnose');
+      if (chk) {
+        chk.onchange = async () => {
+          includeDiagnose = !!chk.checked;
+          handoffRes = await fetchHandoff({
+            mode: 'fix',
+            fingerprint,
+            includeDiagnose,
+          });
+          agentPrompt = handoffRes.ok ? handoffRes.markdown || '' : '';
+          setActiveHandoff({ path: xbotDir, agentPrompt });
+          bindOpenAgentControls(content, { robotUuid, prompt: agentPrompt });
+          toast(includeDiagnose ? '已含诊断结论' : '已用精简提示');
+        };
+      }
+      bindOpenAgentControls(content, { robotUuid, prompt: agentPrompt });
+    }
+    bindFindingHandoffControls();
+
     bindActionButtons(content);
     content.querySelectorAll('[data-patch]').forEach((btn) => {
       btn.addEventListener('click', async () => {

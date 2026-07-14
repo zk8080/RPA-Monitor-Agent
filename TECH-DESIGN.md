@@ -767,6 +767,7 @@ Poll：`POLL_LOOKBACK_HOURS` / `POLL_MAX_PAGES`。
 | **P1** | **S25b** ✅ | 工作台操作面 | 一键 diagnose / maintain dry-run；`/api/findings`；问题详情页 | 经 `runSkill`；Web **永不 apply** |
 | **P2** | **S10b** ✅ | 跨应用归并 | `errorSignature` + `affectedApps`（queue 主键仍 fingerprint） | 日报/总览「跨应用根因」；KB 写入 affectedApps |
 | **P1** | **S26** ✅ | 工作台配置 LLM | `data/settings.llm.json` + GET/PUT/test + 设置页；env > file > local.js | 脱敏 GET；热生效；diagnoseUseLlm；见 [PLAN-LLM-WEB-SETTINGS.md](PLAN-LLM-WEB-SETTINGS.md) |
+| **P1** | **S27a** ✅ | **Coding Agent 瘦身交接包** | `lib/handoff.js` + `/api/findings/:fp/handoff` + `/api/apps/:uuid/handoff`；详情「复制提示」；诊断 opt-in | 默认短（路径+现象）；不含日志/全量档案；Web 不 apply；`test_handoff.js` |
 | **P2** | **S10c** ⏸ | 分诊标签 `fixOwner` | business / developer / known | **暂缓**：业务侧尚无明确归属划分；规则易误导，待组织分工清晰后再做 |
 | **P2** | **S21** | 服务器流程源码策略 | 无 ShadowBot：共享盘 / app-map / 降级 | DEPLOY 专节 + 配置（当前无服务器需求可后置） |
 | **P2** | **S22** ⏸ | develop skill 骨架 | `agent.js develop` 路由 + playbook 占位 | **暂缓**：当前收益低于「工作台 → 复制路径 → Coding Agent」；真要生成流程再立项 |
@@ -802,7 +803,32 @@ maintain: {
 - 每轮 poll 末 `tickVerification`：静默 `maintain.verify.quietDays`（默认 3）天 → `verified`  
 - 配置：`maintain.verify.quietDays` 或 `MAINTAIN_VERIFY_QUIET_DAYS`  
 
-### 15.3 明确不做（除非单独立项）
+### 15.3 S27a 交接包说明（已实现）
+
+**定位：** 给 **外部 Coding Agent**（Cursor / Claude Code 等）的开工摘要，**不是** Monitor 内 LLM 的 system/user（与业务解读 `settings.business-brief`、diagnose system 分离）。
+
+**默认瘦身（L0）：**
+
+- 路径 / 应用 / 流程位置 / 错误类型 / 备注（截断）/ 分诊  
+- **不含** 诊断根因建议、运行日志、多 job 列表、business-brief  
+- 工作方式压成短列表，避免挤占上下文  
+
+**可选：**
+
+- 查询参数 / UI「含诊断」→ `includeDiagnose=1` 附带 Monitor 判断（仍截断）  
+- `workbench.handoffIncludeDiagnose`（默认 `false`）改服务端默认  
+
+**API：**
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/findings/:fp/handoff?includeDiagnose=` | fix 模式 markdown |
+| GET | `/api/apps/:uuid/handoff` | develop 模式 markdown |
+
+**实现：** `monitor/lib/handoff.js`（模板）→ `workbench.getFindingHandoff` / `getAppHandoff` → routes 薄转发；前端不再本地拼长 prompt。  
+**首期不做：** 设置页可编辑交接全文模板；用 LLM 生成交接包。
+
+### 15.4 明确不做（除非单独立项）
 
 | 不做 | 原因 |
 |------|------|
@@ -810,7 +836,7 @@ maintain: {
 | 元素选择器 / 任意 flow 块自动改 | 误伤面大 |
 | 无备份、无 class 白名单的 LLM 全项目改写 | 不可审计 |
 
-### 15.4 运维
+### 15.5 运维
 
 - 生产托管 `service.js`；改代码只经 `maintain fix --apply`  
 - 服务器无本机 ShadowBot 时走 **S21**  
@@ -818,5 +844,5 @@ maintain: {
 
 ---
 
-*文档状态：S0–S9 + maintain S11–S16 已交付；§十五为继续实现 backlog（含 S25 工作台）。*  
-*最后更新：2026-07-12*
+*文档状态：S0–S9 + maintain S11–S16 + 工作台 S25/S25b/S26 + **S27a 瘦身交接包** 已交付；§十五为继续实现 backlog。*  
+*最后更新：2026-07-14*

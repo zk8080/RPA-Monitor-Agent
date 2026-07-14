@@ -18,7 +18,9 @@ Job to be done on any given screen: find an app, understand its flow structure, 
 
 RPA Workbench is the **local observation and entry surface** for the RPA Monitor & Diagnosis Agent. The Agent still runs silently (poll / diagnose / report); the web UI makes local apps, queue failures, rpa-skill understand output (including call-graph flowcharts), and folder/path actions visible without flipping through `data/` or CLI.
 
-Success looks like: open the browser, reach the right app, read a real flowchart, copy or open the project path, and continue work in the coding agent—with less friction than raw logs or the enterprise Yingdao dashboard alone.
+Success looks like: open the browser, reach the right app, read a real flowchart, copy a **short handoff prompt** (or open the project path) into a coding agent, and continue work—with less friction than raw logs or the enterprise Yingdao dashboard alone.
+
+Handoff prompts (S27a) stay lean by default: path + failure symptom + short constraints. Full diagnosis is opt-in so the coding agent is not flooded. This is separate from the in-product business-brief LLM prompts.
 
 ## Positioning
 

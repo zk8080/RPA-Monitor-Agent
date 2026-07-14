@@ -340,6 +340,28 @@ async function handleRequest(req, res, ctx) {
         return true;
       }
 
+      // S27a：失败修复交接提示词（瘦身；?includeDiagnose=1 可选）
+      const findingHandoff = pathname.match(/^\/api\/findings\/([^/]+)\/handoff\/?$/);
+      if (method === 'GET' && findingHandoff) {
+        const fingerprint = decodeURIComponent(findingHandoff[1]);
+        const result = workbench.getFindingHandoff(fingerprint, cfg, {
+          includeDiagnose: url.searchParams.get('includeDiagnose'),
+        });
+        sendJson(res, result.ok ? 200 : result.code === 'not_found' ? 404 : 400, result);
+        return true;
+      }
+
+      // S27a：应用开发交接提示词
+      const appHandoff = pathname.match(/^\/api\/apps\/([^/]+)\/handoff\/?$/);
+      if (method === 'GET' && appHandoff) {
+        const robotUuid = decodeURIComponent(appHandoff[1]);
+        const result = workbench.getAppHandoff(robotUuid, cfg, {
+          taskNote: url.searchParams.get('taskNote') || '',
+        });
+        sendJson(res, result.ok ? 200 : result.code === 'not_found' ? 404 : 400, result);
+        return true;
+      }
+
       // S25b：触发 skill（仅 diagnose / fix-dry-run）
       const findingAction = pathname.match(/^\/api\/findings\/([^/]+)\/(diagnose|fix-dry-run)\/?$/);
       if (method === 'POST' && findingAction) {
