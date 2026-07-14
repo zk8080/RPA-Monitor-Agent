@@ -17,11 +17,12 @@
   --text-2: #475569;
   --text-3: #64748b;
 
-  /* Accent — ink blue, sparse (primary / selection / focus only) */
-  --accent: #1d4ed8;
-  --accent-hover: #1e40af;
-  --accent-soft: rgba(29, 78, 216, 0.08);
-  --accent-ring: rgba(29, 78, 216, 0.22);
+  /* Accent — brand blue #2a6de7, sparse (primary / selection / focus only) */
+  --accent: #2a6de7;
+  --accent-hover: #1f5bc9;
+  --accent-soft: rgba(42, 109, 231, 0.09);
+  --accent-ring: rgba(42, 109, 231, 0.28);
+  --accent-border: rgba(42, 109, 231, 0.35);
 
   /* Semantic */
   --ok: #047857;
@@ -141,7 +142,7 @@ summary:focus-visible {
   width: 32px;
   height: 32px;
   border-radius: var(--radius-control);
-  background: #1d4ed8;
+  background: var(--accent);
   box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.1);
   position: relative;
   flex-shrink: 0;
@@ -655,7 +656,7 @@ a.list-item:hover .item-go,
 }
 .chip:hover {
   background: var(--accent-soft);
-  border-color: rgba(29, 78, 216, 0.22);
+  border-color: var(--accent-ring);
   color: var(--accent);
   text-decoration: none;
 }
@@ -711,7 +712,7 @@ a.list-item:hover .item-go,
   transition: border-color 0.12s var(--ease), background 0.12s var(--ease), color 0.12s var(--ease);
 }
 .handoff-path:hover {
-  border-color: rgba(29, 78, 216, 0.35);
+  border-color: var(--accent-border);
   color: var(--text);
   background: #fff;
 }
@@ -849,7 +850,7 @@ a.list-item:hover .item-go,
   transition: border-color 0.15s var(--ease), box-shadow 0.15s var(--ease);
 }
 .search:focus-within {
-  border-color: rgba(29, 78, 216, 0.35);
+  border-color: var(--accent-border);
   box-shadow: var(--focus), var(--shadow);
 }
 .search::before {
@@ -1713,7 +1714,7 @@ details.fold[open] > summary::before { content: "▾ "; }
   transition: border-color 0.15s var(--ease), box-shadow 0.15s var(--ease);
 }
 .field-input:focus {
-  border-color: rgba(29, 78, 216, 0.4);
+  border-color: var(--accent-border);
   box-shadow: var(--focus);
 }
 .field-input[readonly], .field-input:disabled {

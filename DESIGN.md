@@ -10,8 +10,8 @@ colors:
   text: "#0f172a"
   text-2: "#475569"
   text-3: "#64748b"
-  primary: "#1d4ed8"
-  primary-hover: "#1e40af"
+  primary: "#2a6de7"
+  primary-hover: "#1f5bc9"
   ok: "#047857"
   warn: "#b45309"
   danger: "#b91c1c"
@@ -43,11 +43,11 @@ rounded:
 
 ## Overview
 
-Calm slate tool: cool gray canvas + slate rail + ink-blue accent. Product tool grammar (Linear-like), not warm paper atelier or neon AI console.
+Calm slate tool: cool gray canvas + slate rail + brand-blue accent (`#2a6de7`). Product tool grammar (Linear-like), not warm paper atelier or neon AI console.
 
 ## Colors
 
-Cool near-white neutrals; slate rail; restrained blue accent for primary/selection/focus only. Semantic colors only on status.
+Cool near-white neutrals; slate rail; restrained brand blue (`#2a6de7`) for primary/selection/focus only. Semantic colors only on status.
 
 ## Typography
 
