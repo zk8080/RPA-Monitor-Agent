@@ -101,6 +101,21 @@ function buildFixPrompt(ctx = {}) {
   if (triageBits.length) {
     lines.push(`- 分诊：${triageBits.join(' / ')}`);
   }
+  if (ctx.bucketLabel || ctx.bucket) {
+    lines.push(`- 分流：${ctx.bucketLabel || ctx.bucket}`);
+  }
+  // 环境/调度类：明确劝阻硬改业务代码
+  if (ctx.actionable === 'ops' || ctx.bucket === 'env_robot' || ctx.bucket === 'schedule') {
+    lines.push(
+      '',
+      '> ⚠ 分流为环境/调度类：优先查机器人在线、客户端、任务排队；**不要先改业务 py/flow**。',
+    );
+  } else if (ctx.bucket === 'element') {
+    lines.push(
+      '',
+      '> 分流为元素类：优先查选择器/等待/页面结构；**不要当成 py 逻辑 bug 先改脚本**。',
+    );
+  }
 
   if (truthyFlag(ctx.includeDiagnose) && (ctx.rootCause || ctx.suggestion)) {
     lines.push('', '## Monitor 判断（参考，需核实）');

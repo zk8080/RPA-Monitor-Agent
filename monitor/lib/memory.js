@@ -5,6 +5,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const workStatusLib = require('./work-status');
 
 function ensureDir(dir) {
   fs.mkdirSync(dir, { recursive: true });
@@ -254,6 +255,8 @@ function upsertQueueItem(dataDir, item, meta = {}) {
 
   // 有 jobUuid 时：仅新 job 计一次；无 uuid 时每次观察 +1（兼容旧调用）
   const isNewOccurrence = meta.jobUuid ? !alreadyHadJob : true;
+  /** 与 isNewOccurrence 在有 jobUuid 时一致；无 uuid 时不算「新 job 唤醒」 */
+  const isNewJob = Boolean(meta.jobUuid && !alreadyHadJob);
   const occurrenceCount = isNewOccurrence
     ? (existing?.occurrenceCount || 0) + 1
     : existing?.occurrenceCount || 1;
@@ -330,6 +333,19 @@ function upsertQueueItem(dataDir, item, meta = {}) {
     kbId: existing?.kbId ?? null,
   };
 
+  // workStatus：新 job 唤醒规则；无新 job 保留人工处置
+  const ws = workStatusLib.mergeWorkStatusOnUpsert(existing, {
+    isNewJob,
+    forceOpen: meta.forceOpenWorkStatus === true,
+    now,
+  });
+  next.workStatus = ws.workStatus;
+  next.snoozedUntil = ws.snoozedUntil;
+  next.workStatusUpdatedAt = ws.workStatusUpdatedAt;
+  next.workStatusReason = ws.workStatusReason;
+  next.reopenedBy = ws.reopenedBy;
+  next.ignoredStillFailing = ws.ignoredStillFailing;
+
   // 保留诊断等扩展字段（同指纹再扫时不丢）
   if (existing) {
     if (existing.diagnosedAt) next.diagnosedAt = existing.diagnosedAt;
@@ -339,6 +355,21 @@ function upsertQueueItem(dataDir, item, meta = {}) {
   }
 
   atomicWriteJson(queuePath(dataDir, item.fingerprint), next);
+  return next;
+}
+
+/**
+ * 人工设置 queue workStatus（open / snoozed / ignored）
+ * @param {string} dataDir
+ * @param {string} fingerprint
+ * @param {'open'|'snoozed'|'ignored'} status
+ * @param {{ snoozeDays?: number, snoozedUntil?: string, reason?: string }} [opts]
+ */
+function setQueueWorkStatus(dataDir, fingerprint, status, opts = {}) {
+  const existing = loadQueueItem(dataDir, fingerprint);
+  if (!existing) return null;
+  const next = workStatusLib.applyManualWorkStatus(existing, status, opts);
+  atomicWriteJson(queuePath(dataDir, fingerprint), next);
   return next;
 }
 
@@ -416,6 +447,7 @@ module.exports = {
   queuePath,
   loadQueueItem,
   upsertQueueItem,
+  setQueueWorkStatus,
   listQueueItems,
   markQueueDiagnosed,
   writeAlert,

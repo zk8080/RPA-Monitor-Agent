@@ -540,6 +540,12 @@ kbd {
   color: var(--text-3);
 }
 
+.metric .hint.faint,
+.meta.faint {
+  opacity: 0.85;
+  font-weight: 400;
+}
+
 /* Lists */
 .list { display: flex; flex-direction: column; }
 .list-item {
@@ -797,6 +803,30 @@ a.list-item:hover .item-go,
   margin: 0;
   font-size: 12px;
   color: var(--text-3);
+}
+
+/* S27b 分流筛选 chip */
+.bucket-filters {
+  gap: 8px;
+}
+.chip.bucket-chip {
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--surface-inset);
+  color: var(--text-2);
+}
+.chip.bucket-chip:hover {
+  border-color: var(--accent-border);
+  color: var(--text);
+}
+.chip.bucket-chip.active {
+  border-color: var(--accent);
+  background: var(--accent-soft, rgba(42, 109, 231, 0.1));
+  color: var(--accent);
+  font-weight: 600;
+}
+.mb-sm {
+  margin-bottom: 10px;
 }
 
 /* Split button: 在 Agent 打开 + 下拉 */

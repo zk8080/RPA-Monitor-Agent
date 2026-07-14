@@ -15,6 +15,8 @@ const { runSkill } = require('./agent-runner');
 const { buildDailyReport, toDateKey } = require('./report');
 const { mergeByErrorSignature } = require('./merge');
 const handoff = require('./handoff');
+const bucketLib = require('./bucket');
+const workStatusLib = require('./work-status');
 
 /** @type {{ at: number, apps: object, queueStats: Map } | null} */
 let memCache = null;
@@ -38,6 +40,17 @@ function getWorkbenchConfig(cfg = {}) {
     settingsEnabled: w.settingsEnabled !== false,
     // S27a：交接包默认是否附带诊断（仍可被查询参数覆盖）
     handoffIncludeDiagnose: w.handoffIncludeDiagnose === true,
+    // S27d：优先队列只看 open，且失败时间在 recentDays 内（0=不限）
+    priorityRecentDays:
+      w.priorityRecentDays != null
+        ? Number(w.priorityRecentDays)
+        : process.env.WORKBENCH_PRIORITY_RECENT_DAYS != null
+          ? Number(process.env.WORKBENCH_PRIORITY_RECENT_DAYS)
+          : 14,
+    defaultSnoozeDays:
+      w.defaultSnoozeDays != null
+        ? Number(w.defaultSnoozeDays)
+        : workStatusLib.DEFAULT_SNOOZE_DAYS,
   };
 }
 
@@ -201,6 +214,8 @@ function crossFingerprintSet(groups) {
 
 /**
  * 今日优先队列：按失败指纹排序，告诉人「先处理谁」
+ * 仅 workStatus 有效 open（snoozed 过期算 open；ignored 不进）
+ * 可选 recentDays：lastFailureAt 在窗口内
  * 排序：未诊断 > 复发 > 跨应用 > 可预览修 > 高频 occurrence；同分按失败时间新→旧
  *
  * @param {object[]} queueItems
@@ -209,6 +224,8 @@ function crossFingerprintSet(groups) {
  *   crossFpSet?: Set<string>,
  *   patchIndex?: Map<string, { regressed?: boolean, planned?: boolean }>,
  *   minOccurrenceHigh?: number,
+ *   recentDays?: number,
+ *   now?: string|Date,
  *   nameResolver?: (item: object) => { robotName?: string, taskName?: string },
  * }} [opts]
  * @returns {object[]}
@@ -218,12 +235,27 @@ function buildPriorityQueue(queueItems, opts = {}) {
   const minOcc = opts.minOccurrenceHigh > 0 ? opts.minOccurrenceHigh : 3;
   const crossSet = opts.crossFpSet || new Set();
   const patchIndex = opts.patchIndex || new Map();
+  const recentDays =
+    opts.recentDays != null && Number(opts.recentDays) >= 0
+      ? Number(opts.recentDays)
+      : 14;
+  const now = opts.now || new Date();
   const nameResolver =
     typeof opts.nameResolver === 'function' ? opts.nameResolver : () => ({});
 
   const ranked = [];
   for (const it of queueItems || []) {
     if (!it || !it.fingerprint) continue;
+
+    // S27d：非 open（含 snoozed 有效期 / ignored）不进优先
+    if (
+      !workStatusLib.isPriorityEligible(it, {
+        now,
+        recentDays: recentDays > 0 ? recentDays : undefined,
+      })
+    ) {
+      continue;
+    }
 
     const patchInfo = patchIndex.get(it.fingerprint) || {};
     const reasons = [];
@@ -244,18 +276,26 @@ function buildPriorityQueue(queueItems, opts = {}) {
 
     // 可预览：分诊 canPreview 或已有 planned dry-run（不依赖本机 resolve，避免总览扫盘）
     let canPreview = false;
+    let triage = null;
     try {
-      const triage = classifyFix(it, { logs: [] });
+      triage = classifyFix(it, { logs: [] });
       // 无 appInfo 时 auto 常降为 assisted；有 python 目标才算 canPreviewFix
       canPreview = canPreviewFix(triage);
       if (!canPreview && triage.fixability === 'auto') canPreview = true;
     } catch {
       canPreview = false;
+      triage = null;
     }
     if (patchInfo.planned) canPreview = true;
     if (canPreview) {
       reasons.push('can_preview');
       score += PRIORITY_WEIGHTS.can_preview;
+    }
+
+    const bucketInfo = bucketLib.classifyBucket(it, triage);
+    // 可开发类略加权，环境噪声不额外抬分（仍可因未诊断等原因入列）
+    if (bucketLib.isDevActionable(bucketInfo.bucket) && canPreview) {
+      score += 8;
     }
 
     const occ = Number(it.occurrenceCount) || 0;
@@ -269,6 +309,7 @@ function buildPriorityQueue(queueItems, opts = {}) {
 
     const names = nameResolver(it) || {};
     const failAt = failureTimeOf(it);
+    const ws = workStatusLib.resolveEffectiveWorkStatus(it, now);
     ranked.push({
       fingerprint: it.fingerprint,
       robotUuid: it.robotUuid || null,
@@ -281,6 +322,12 @@ function buildPriorityQueue(queueItems, opts = {}) {
       lastSeen: failAt,
       fixStatus: it.fixStatus || null,
       canPreviewFix: canPreview,
+      bucket: bucketInfo.bucket,
+      bucketLabel: bucketInfo.label,
+      actionable: bucketInfo.actionable,
+      workStatus: ws.workStatus,
+      workStatusLabel: ws.workStatusLabel,
+      reopenedBy: ws.reopenedBy,
       reasons,
       reasonLabels: reasons.map((r) => PRIORITY_LABELS[r] || r),
       primaryReason: reasons[0],
@@ -304,6 +351,16 @@ function buildOverview(cfg, state = {}) {
   const bundle = getAppsBundle(cfg);
   const { scan, queueItems, queueStats } = bundle;
   const undiagnosed = queueItems.filter((q) => !q.diagnosed).length;
+  // S27b：全 queue 技术分流计数（运行时，不写盘）
+  const bucketAgg = bucketLib.aggregateBuckets(queueItems, {
+    triageOf: (it) => {
+      try {
+        return classifyFix(it, { logs: [] });
+      } catch {
+        return null;
+      }
+    },
+  });
 
   const localByUuid = new Map((scan.apps || []).map((a) => [a.robotUuid, a]));
   const taskIndex = memory.loadTaskIndex(cfg.dataDir);
@@ -345,10 +402,12 @@ function buildOverview(cfg, state = {}) {
   } catch {
     patchIndex = new Map();
   }
+  const wbCfg = getWorkbenchConfig(cfg);
   const priorityQueue = buildPriorityQueue(queueItems, {
     limit: 10,
     crossFpSet: crossFingerprintSet(crossAppGroupsRaw),
     patchIndex,
+    recentDays: wbCfg.priorityRecentDays,
     nameResolver: (it) => {
       const rid = it.robotUuid;
       const local = rid ? localByUuid.get(rid) : null;
@@ -360,6 +419,21 @@ function buildOverview(cfg, state = {}) {
       return { robotName: appName, taskName: merged.taskName || it.taskName || '' };
     },
   });
+
+  // 处置态计数（全队列；不改变 depth 语义）
+  let workOpen = 0;
+  let workSnoozed = 0;
+  let workIgnored = 0;
+  let ignoredStillFailing = 0;
+  const nowWs = new Date();
+  for (const it of queueItems) {
+    const eff = workStatusLib.resolveEffectiveWorkStatus(it, nowWs);
+    if (eff.workStatus === 'snoozed') workSnoozed += 1;
+    else if (eff.workStatus === 'ignored') {
+      workIgnored += 1;
+      if (eff.ignoredStillFailing) ignoredStillFailing += 1;
+    } else workOpen += 1;
+  }
 
   const startedAt = state.startedAt || Date.now();
 
@@ -381,8 +455,22 @@ function buildOverview(cfg, state = {}) {
     queue: {
       depth: queueItems.length,
       undiagnosed,
+      /** S27b 技术分流计数 */
+      byBucket: bucketAgg.byBucket,
+      bucketLabels: bucketAgg.labels,
+      // 可开发 = 代码(py) + 元素 + 数据配置（不含机器人/调度）
+      devActionable: bucketLib.countDevActionable(bucketAgg.byBucket),
+      opsNoise: bucketLib.countOpsNoise(bucketAgg.byBucket),
+      /** S27d 处置态（优先队列只吃 open） */
+      workStatus: {
+        open: workOpen,
+        snoozed: workSnoozed,
+        ignored: workIgnored,
+        ignoredStillFailing,
+      },
+      priorityRecentDays: wbCfg.priorityRecentDays,
     },
-    /** 今日优先处理的失败指纹（最多 10） */
+    /** 今日优先处理的失败指纹（最多 10；仅 open + 近 N 天） */
     priorityQueue,
     problemApps,
     crossAppGroups: crossAppGroups.map((g) => ({
@@ -692,6 +780,8 @@ function enrichFailureItem(it, cfg) {
     suggestion: it.lastDiagnosis && it.lastDiagnosis.suggestion,
   });
   const failAt = failureTimeOf(it);
+  const bucketInfo = bucketLib.classifyBucket(it, triage);
+  const ws = workStatusLib.resolveEffectiveWorkStatus(it);
   return {
     fingerprint: it.fingerprint,
     flowName: it.flowName,
@@ -716,6 +806,17 @@ function enrichFailureItem(it, cfg) {
     fixability: triage.fixability,
     canPreviewFix: canPreviewFix(triage),
     guidance,
+    // S27b
+    bucket: bucketInfo.bucket,
+    bucketLabel: bucketInfo.label,
+    actionable: bucketInfo.actionable,
+    bucketReason: bucketInfo.reason,
+    // S27d
+    workStatus: ws.workStatus,
+    workStatusLabel: ws.workStatusLabel,
+    snoozedUntil: ws.snoozedUntil,
+    reopenedBy: ws.reopenedBy,
+    ignoredStillFailing: ws.ignoredStillFailing,
   };
 }
 
@@ -767,6 +868,22 @@ function getFindingDetail(fingerprint, cfg) {
       canPreviewFix: enriched.canPreviewFix,
     },
     guidance: enriched.guidance,
+    // S27b 技术分流
+    bucket: {
+      id: enriched.bucket,
+      label: enriched.bucketLabel,
+      actionable: enriched.actionable,
+      reason: enriched.bucketReason,
+    },
+    // S27d 处置态
+    work: {
+      status: enriched.workStatus,
+      label: enriched.workStatusLabel,
+      snoozedUntil: enriched.snoozedUntil,
+      reopenedBy: enriched.reopenedBy,
+      ignoredStillFailing: enriched.ignoredStillFailing,
+      defaultSnoozeDays: getWorkbenchConfig(cfg).defaultSnoozeDays,
+    },
     // 附加字段：失败详情「复制路径 / Agent 提示」；旧客户端可忽略
     xbotDir,
     appName: appName || null,
@@ -796,6 +913,49 @@ function getFindingDetail(fingerprint, cfg) {
 }
 
 /**
+ * S27d：设置失败处置态（仅影响优先队列，不删 queue、不改 py）
+ * @param {string} fingerprint
+ * @param {object} cfg
+ * @param {{ status: string, snoozeDays?: number, reason?: string }} body
+ */
+function setFindingWorkStatus(fingerprint, cfg, body = {}) {
+  if (!fingerprint) {
+    return { ok: false, code: 'missing_fingerprint', message: '缺少 fingerprint' };
+  }
+  const raw = String(body.status || '').trim().toLowerCase();
+  if (!['open', 'snoozed', 'ignored'].includes(raw)) {
+    return {
+      ok: false,
+      code: 'invalid_status',
+      message: 'status 须为 open | snoozed | ignored',
+    };
+  }
+  const status = workStatusLib.normalizeWorkStatus(raw);
+  const wb = getWorkbenchConfig(cfg);
+  const snoozeDays =
+    body.snoozeDays > 0 ? Number(body.snoozeDays) : wb.defaultSnoozeDays || 3;
+  const next = memory.setQueueWorkStatus(cfg.dataDir, fingerprint, status, {
+    snoozeDays,
+    reason: body.reason || `manual_${status}`,
+  });
+  if (!next) {
+    return { ok: false, code: 'not_found', message: 'queue 中无此 fingerprint' };
+  }
+  invalidateAppsCache();
+  const eff = workStatusLib.resolveEffectiveWorkStatus(next);
+  return {
+    ok: true,
+    fingerprint,
+    workStatus: next.workStatus,
+    workStatusLabel: eff.workStatusLabel,
+    snoozedUntil: next.snoozedUntil || null,
+    reopenedBy: next.reopenedBy || null,
+    ignoredStillFailing: next.ignoredStillFailing === true,
+    item: next,
+  };
+}
+
+/**
  * S27a：失败修复交接提示词（瘦身；诊断 opt-in）
  * @param {string} fingerprint
  * @param {object} cfg
@@ -817,6 +977,7 @@ function getFindingHandoff(fingerprint, cfg, opts = {}) {
   const g = detail.guidance || {};
   const triage = detail.triage || {};
 
+  const b = detail.bucket || {};
   const ctx = {
     mode: 'fix',
     name: detail.appName || f.robotName || '',
@@ -833,6 +994,9 @@ function getFindingHandoff(fingerprint, cfg, opts = {}) {
     rootCause: d.rootCause || k.rootCause,
     suggestion: d.suggestion || k.solution,
     includeDiagnose,
+    bucket: b.id || '',
+    bucketLabel: b.label || '',
+    actionable: b.actionable || '',
   };
 
   const markdown = handoff.buildFixPrompt(ctx);
@@ -1622,6 +1786,8 @@ module.exports = {
   getFindingDetail,
   getFindingHandoff,
   getAppHandoff,
+  setFindingWorkStatus,
+  classifyBucket: bucketLib.classifyBucket,
   listPatchesForWorkbench,
   getPatchDetail,
   runWorkbenchAction,

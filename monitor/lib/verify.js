@@ -142,11 +142,15 @@ function onFingerprintRecurred(dataDir, fingerprint, ctx = {}) {
 
     const q = memory.loadQueueItem(dataDir, fingerprint);
     if (q) {
+      // eslint-disable-next-line global-require
+      const workStatusLib = require('./work-status');
       memory.atomicWriteJson(memory.queuePath(dataDir, fingerprint), {
         ...q,
         fixStatus: 'regressed',
         lastPatchId: meta.patchId,
         regressedAt: now,
+        // 验证复发：强制 open，盖过 snoozed / ignored
+        ...workStatusLib.forceOpenFields('regressed', now),
       });
     }
 

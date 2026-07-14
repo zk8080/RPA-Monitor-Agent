@@ -38,7 +38,7 @@
 | maintain | playbook skill：`inspect` / `fix`（默认 dry-run）/ `rollback` |
 | 写盘 | 仅 `maintain fix --apply` + autoFix 配置；**service 不自动改 py** |
 | report | 本轮 findings 条数，无历史 occurrence 展示 |
-| workbench | 失败时间 **绝对本地时间**；跨应用卡片不展示内部 errorSignature；**设置页**配 LLM；业务流程 **业务解读(LLM)**；**S27a 交接提示**（`lib/handoff` 瘦身；默认不含诊断） |
+| workbench | 失败时间 **绝对本地时间**；跨应用卡片不展示内部 errorSignature；**设置页**配 LLM；业务流程 **业务解读(LLM)**；**S27a 交接提示**（`lib/handoff` 瘦身；默认不含诊断）；**S27b bucket 分流**（可开发 vs 环境/调度） |
 | LLM | `lib/llm.js`；timeout 默认 600s；**env > data/settings.llm.json > config.local**；`diagnoseUseLlm` |
 | 形态 | **Agent skills + tools**；CLI/service 为触发方式，非「散装脚本身份」 |
 | 验证补充 | `node monitor/test_queue_time.js` |
@@ -68,6 +68,8 @@ D:\RPA-Monitor-Agent  消费：监听 OpenAPI + 诊断 Agent + 日报 / KB
    - `node monitor/test_maintain.js`
    - `node monitor/test_workbench.js`
    - `node monitor/test_handoff.js`
+   - `node monitor/test_bucket.js`
+   - `node monitor/test_work_status.js`
    - `node monitor/test_queue_time.js`
    - `node monitor/test_settings_llm.js`  
 
@@ -89,6 +91,8 @@ D:\RPA-Monitor-Agent  消费：监听 OpenAPI + 诊断 Agent + 日报 / KB
 - ➡ **继续实现 backlog：** [TECH-DESIGN.md §十五](TECH-DESIGN.md)  
   - **主路径（当前）：** 工作台理解失败/流程 → **复制瘦身交接提示 / 打开 Agent** → Coding Agent 改代码（收益最高）  
   - ✅ **S27a** 瘦身交接包（`lib/handoff.js`；诊断 opt-in；非可配全文模板）  
+  - ✅ **S27b** 噪声分流 bucket（`lib/bucket.js`；元素≠代码；code 仅 py/变量；UI 三档筛选）  
+  - ✅ **S27d** workStatus（open/snoozed/ignored；新 job 唤醒；优先队列仅 open）  
   - **P2 后置：** S21 服务器源码（暂无需求）  
   - **P2 ⏸ S10c** fixOwner：归属划分未明确，暂缓  
   - **P2 ⏸ S22** develop 骨架：不如直接 Coding Agent，暂缓  

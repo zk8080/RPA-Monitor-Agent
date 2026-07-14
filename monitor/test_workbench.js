@@ -98,6 +98,7 @@ const pq = buildPriorityQueue(
     limit: 10,
     crossFpSet: new Set(['fp-cross']),
     patchIndex: new Map(),
+    recentDays: 0, // 不限时间，避免环境日期影响单测
   },
 );
 assert.ok(pq.length >= 4);
@@ -270,6 +271,32 @@ const state = { startedAt: Date.now(), lastPollAt: null, lastDiagnoseAt: null, l
   // S27a handoff routes
   const handoffMiss = await request(server, 'GET', '/api/findings/no-such-fp/handoff');
   assert.strictEqual(handoffMiss.status, 404);
+
+  // S27d work-status route exists
+  const wsMiss = await new Promise((resolve, reject) => {
+    const addr = server.address();
+    const body = JSON.stringify({ status: 'snoozed' });
+    const req = http.request(
+      {
+        host: '127.0.0.1',
+        port: addr.port,
+        path: '/api/findings/no-such-fp/work-status',
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) },
+      },
+      (res) => {
+        const chunks = [];
+        res.on('data', (c) => chunks.push(c));
+        res.on('end', () => {
+          resolve({ status: res.statusCode, body: Buffer.concat(chunks).toString('utf8') });
+        });
+      },
+    );
+    req.on('error', reject);
+    req.write(body);
+    req.end();
+  });
+  assert.strictEqual(wsMiss.status, 404);
   const appHandoff = await request(server, 'GET', '/api/apps/no-such-robot/handoff');
   assert.strictEqual(appHandoff.status, 200);
   const appHandoffJson = JSON.parse(appHandoff.body);

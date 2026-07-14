@@ -18,6 +18,8 @@
     "health": "node -e \"const p=process.env.HEALTH_PORT||8787;fetch('http://127.0.0.1:'+p+'/health').then(r=>r.text()).then(console.log).catch(e=>{console.error(e.message);process.exit(1)})\"",
     "test:workbench": "node monitor/test_workbench.js",
     "test:handoff": "node monitor/test_handoff.js",
+    "test:bucket": "node monitor/test_bucket.js",
+    "test:work-status": "node monitor/test_work_status.js",
     "test:maintain": "node monitor/test_maintain.js",
     "test:auto-plan": "node monitor/test_auto_plan.js",
     "test:verify": "node monitor/test_verify.js",

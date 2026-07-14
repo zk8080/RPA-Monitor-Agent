@@ -351,6 +351,29 @@ async function handleRequest(req, res, ctx) {
         return true;
       }
 
+      // S27d：处置态 open | snoozed | ignored
+      const findingWork = pathname.match(/^\/api\/findings\/([^/]+)\/work-status\/?$/);
+      if (method === 'POST' && findingWork) {
+        const fingerprint = decodeURIComponent(findingWork[1]);
+        let body = {};
+        try {
+          const raw = await readBody(req);
+          if (raw) body = JSON.parse(raw);
+        } catch {
+          body = {};
+        }
+        const result = workbench.setFindingWorkStatus(fingerprint, cfg, body);
+        const status = result.ok
+          ? 200
+          : result.code === 'not_found'
+            ? 404
+            : result.code === 'invalid_status'
+              ? 400
+              : 400;
+        sendJson(res, status, result);
+        return true;
+      }
+
       // S27a：应用开发交接提示词
       const appHandoff = pathname.match(/^\/api\/apps\/([^/]+)\/handoff\/?$/);
       if (method === 'GET' && appHandoff) {

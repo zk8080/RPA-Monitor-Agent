@@ -530,9 +530,13 @@
   function failureSideHtml(f) {
     const canPreview = f.canPreviewFix === true;
     const fixLabel = f.guidance?.title || f.fixClass || '';
+    const bucketLabel = f.bucketLabel || '';
+    const bucketCls =
+      f.actionable === 'ops' ? 'badge warn' : f.actionable === 'dev' ? 'badge ok' : 'badge';
     return `<div class="item-side">
       <div class="badges">
         ${f.diagnosed ? '<span class="badge ok">已诊断</span>' : '<span class="badge warn">未诊断</span>'}
+        ${bucketLabel ? `<span class="${bucketCls}" title="技术分流">${esc(bucketLabel)}</span>` : ''}
         ${fixLabel ? `<span class="badge">${esc(fixLabel)}</span>` : ''}
         ${
           canPreview
@@ -2149,72 +2153,155 @@
     const cross = data.crossAppGroups || [];
     const priority = data.priorityQueue || [];
     const und = q.undiagnosed ?? 0;
+    const byBucket = q.byBucket || {};
+    const devCount =
+      q.devActionable ??
+      (byBucket.code || 0) + (byBucket.element || 0) + (byBucket.data_config || 0);
+    const opsCount = q.opsNoise ?? (byBucket.env_robot || 0) + (byBucket.schedule || 0);
     const recent = getRecentApps();
 
     if (la.usersRoot) setActiveHandoff({ path: la.usersRoot });
 
+    function bucketBadgeHtml(item) {
+      if (!item || !item.bucketLabel) return '';
+      const cls =
+        item.actionable === 'ops'
+          ? 'badge warn'
+          : item.actionable === 'dev'
+            ? 'badge ok'
+            : 'badge';
+      return `<span class="${cls}" title="技术分流">${esc(item.bucketLabel)}</span>`;
+    }
+
+    function matchBucketFilter(item, filter) {
+      if (!filter || filter === 'all') return true;
+      if (filter === 'dev') {
+        return (
+          item.actionable === 'dev' ||
+          item.bucket === 'code' ||
+          item.bucket === 'element' ||
+          item.bucket === 'data_config'
+        );
+      }
+      if (filter === 'ops') {
+        return (
+          item.actionable === 'ops' ||
+          item.bucket === 'env_robot' ||
+          item.bucket === 'schedule'
+        );
+      }
+      return item.bucket === filter;
+    }
+
+    function renderPriorityList(filter) {
+      const filtered = priority.filter((item) => matchBucketFilter(item, filter));
+      if (!filtered.length) {
+        return empty(
+          filter === 'dev' ? '暂无可开发优先项' : '暂无优先项',
+          filter === 'dev'
+            ? '当前优先队列里没有代码/配置类失败（多为环境或调度）'
+            : '队列空，或条目均已诊断且无跨应用/复发/高频信号',
+          '<a class="btn sm" href="#/apps">浏览应用</a>',
+        );
+      }
+      return `<div class="list">${filtered
+        .map((item, idx) => {
+          const href = `#/findings/${encodeURIComponent(item.fingerprint)}`;
+          const appName = String(item.robotName || item.robotUuid || '').trim();
+          const taskName = String(item.taskName || '').trim();
+          const appLabel =
+            taskName && appName && taskName !== appName
+              ? `${taskName}（${appName}）`
+              : taskName || appName || '未知应用';
+          const flow =
+            item.flowName && !/^(unknown-flow|no-flow)$/i.test(String(item.flowName).trim())
+              ? item.flowName
+              : '';
+          const titleBits = [flow, item.errorType].filter(Boolean);
+          const title =
+            titleBits.join(' · ') ||
+            String(item.fingerprint || '').slice(0, 48) ||
+            '失败';
+          const time = item.lastSeen ? relTime(item.lastSeen) : '';
+          const occ = item.occurrenceCount > 1 ? `${item.occurrenceCount} 次` : '';
+          const sub = [appLabel, time, occ].filter(Boolean).join(' · ');
+          const badges =
+            bucketBadgeHtml(item) +
+            (item.reasonLabels || [])
+              .map((lab, i) => {
+                const reason = (item.reasons && item.reasons[i]) || '';
+                const cls =
+                  reason === 'undiagnosed' || reason === 'regressed'
+                    ? 'badge warn'
+                    : reason === 'cross_app'
+                      ? 'badge danger'
+                      : reason === 'can_preview'
+                        ? 'badge ok'
+                        : 'badge';
+                return `<span class="${cls}">${esc(lab)}</span>`;
+              })
+              .join('');
+          return `<a class="list-item" href="${href}">
+            <div class="item-main">
+              <div class="item-title"><span class="priority-rank">${idx + 1}</span>${esc(title)}</div>
+              ${sub ? `<div class="item-sub">${esc(sub)}</div>` : ''}
+            </div>
+            <div class="item-side">
+              <div class="badges">${badges}</div>
+              <span class="item-go">处理 →</span>
+            </div>
+          </a>`;
+        })
+        .join('')}</div>`;
+    }
+
+    // chip 数字 = 今日优先列表内计数；UI 只保留三档（细 bucket 仍在 badge/API）
+    function countInPriority(filter) {
+      return priority.filter((item) => matchBucketFilter(item, filter)).length;
+    }
+    const bucketChipDefs = [
+      { id: 'all', label: `全部 ${priority.length}` },
+      { id: 'dev', label: `可开发 ${countInPriority('dev')}` },
+      { id: 'ops', label: `环境/调度 ${countInPriority('ops')}` },
+    ];
+
+    let priorityFilter = 'all';
+    try {
+      const saved = localStorage.getItem('rpa_wb_bucket_filter');
+      if (saved && bucketChipDefs.some((c) => c.id === saved)) priorityFilter = saved;
+    } catch {
+      // ignore
+    }
+
+    // 失败指纹副文案：仅描述「全 queue」，不与下方优先列表并列成第二套大数字
+    const queueHintParts = [
+      und > 0 ? `未诊断 ${und}` : null,
+      devCount > 0 ? `可开发 ${devCount}` : null,
+      opsCount > 0 ? `环境/调度 ${opsCount}` : null,
+      (byBucket.unknown || 0) > 0 ? `未分类 ${byBucket.unknown || 0}` : null,
+    ].filter(Boolean);
+    const queueHint =
+      queueHintParts.length > 0
+        ? queueHintParts.join(' · ')
+        : '当前无失败指纹';
+
+    const wsQ = q.workStatus || {};
+    const recentDays = q.priorityRecentDays != null ? q.priorityRecentDays : 14;
     const priorityPanel = `
       <div class="panel mb panel-priority">
-        <h2>今日优先 <span class="meta">${priority.length}</span></h2>
-        <p class="hint mb-sm">按未诊断 → 复发 → 跨应用 → 可预览修 → 高频排序，点进问题详情处理。</p>
-        ${
-          priority.length
-            ? `<div class="list">${priority
-                .map((item, idx) => {
-                  const href = `#/findings/${encodeURIComponent(item.fingerprint)}`;
-                  const appName = String(item.robotName || item.robotUuid || '').trim();
-                  const taskName = String(item.taskName || '').trim();
-                  const appLabel =
-                    taskName && appName && taskName !== appName
-                      ? `${taskName}（${appName}）`
-                      : taskName || appName || '未知应用';
-                  const flow =
-                    item.flowName && !/^(unknown-flow|no-flow)$/i.test(String(item.flowName).trim())
-                      ? item.flowName
-                      : '';
-                  const titleBits = [flow, item.errorType].filter(Boolean);
-                  const title =
-                    titleBits.join(' · ') ||
-                    String(item.fingerprint || '').slice(0, 48) ||
-                    '失败';
-                  const time = item.lastSeen ? relTime(item.lastSeen) : '';
-                  const occ =
-                    item.occurrenceCount > 1 ? `${item.occurrenceCount} 次` : '';
-                  const sub = [appLabel, time, occ].filter(Boolean).join(' · ');
-                  const badges = (item.reasonLabels || [])
-                    .map((lab, i) => {
-                      const reason = (item.reasons && item.reasons[i]) || '';
-                      const cls =
-                        reason === 'undiagnosed' || reason === 'regressed'
-                          ? 'badge warn'
-                          : reason === 'cross_app'
-                            ? 'badge danger'
-                            : reason === 'can_preview'
-                              ? 'badge ok'
-                              : 'badge';
-                      return `<span class="${cls}">${esc(lab)}</span>`;
-                    })
-                    .join('');
-                  return `<a class="list-item" href="${href}">
-                    <div class="item-main">
-                      <div class="item-title"><span class="priority-rank">${idx + 1}</span>${esc(
-                        title,
-                      )}</div>
-                      ${sub ? `<div class="item-sub">${esc(sub)}</div>` : ''}
-                    </div>
-                    <div class="item-side">
-                      <div class="badges">${badges}</div>
-                      <span class="item-go">处理 →</span>
-                    </div>
-                  </a>`;
-                })
-                .join('')}</div>`
-            : empty(
-                '暂无优先项',
-                '队列空，或条目均已诊断且无跨应用/复发/高频信号',
-                '<a class="btn sm" href="#/apps">浏览应用</a>',
-              )
-        }
+        <h2>优先处理 <span class="meta" id="priority-count">${countInPriority(priorityFilter)}</span><span class="meta faint"> / ${priority.length}</span></h2>
+        <p class="hint mb-sm">仅<strong>待处理(open)</strong>且失败约近 ${esc(recentDays)} 天内的指纹；按未诊断 → 复发 → 跨应用 → 可预览修 → 高频排序，最多 10 条。稍后/不再提醒的不进本列表。待处理 ${esc(wsQ.open ?? '—')} · 稍后 ${esc(wsQ.snoozed ?? 0)} · 不提醒 ${esc(wsQ.ignored ?? 0)}${wsQ.ignoredStillFailing ? `（忽略后仍失败 ${wsQ.ignoredStillFailing}）` : ''}。</p>
+        <div class="chip-row bucket-filters mb-sm" role="toolbar" aria-label="今日优先分流筛选">
+          ${bucketChipDefs
+            .map(
+              (c) =>
+                `<button type="button" class="chip bucket-chip ${
+                  c.id === priorityFilter ? 'active' : ''
+                }" data-bucket-filter="${esc(c.id)}">${esc(c.label)}</button>`,
+            )
+            .join('')}
+        </div>
+        <div id="priority-list-host">${renderPriorityList(priorityFilter)}</div>
       </div>`;
 
     content.innerHTML = `
@@ -2225,10 +2312,10 @@
           <div class="value">${esc(la.count ?? 0)}</div>
           <div class="hint">有失败 ${esc(problems.length)}</div>
         </div>
-        <div class="metric">
+        <div class="metric" title="queue 全部失败指纹；下方今日优先只是其中 Top 10">
           <div class="label">失败指纹</div>
           <div class="value">${esc(q.depth ?? 0)}</div>
-          <div class="hint">未诊断 ${esc(und)}</div>
+          <div class="hint">${esc(queueHint)}</div>
         </div>
         <div class="metric">
           <div class="label">跨应用根因</div>
@@ -2371,6 +2458,29 @@
     if (pollHome) {
       pollHome.onclick = () => triggerPollNow(pollHome);
     }
+
+    // S27b：优先队列分流筛选
+    content.querySelectorAll('[data-bucket-filter]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const id = btn.getAttribute('data-bucket-filter') || 'all';
+        priorityFilter = id;
+        try {
+          localStorage.setItem('rpa_wb_bucket_filter', id);
+        } catch {
+          // ignore
+        }
+        content.querySelectorAll('[data-bucket-filter]').forEach((b) => {
+          b.classList.toggle('active', b.getAttribute('data-bucket-filter') === id);
+        });
+        const host = $('#priority-list-host');
+        if (host) host.innerHTML = renderPriorityList(id);
+        const cnt = $('#priority-count');
+        if (cnt) {
+          const n = priority.filter((item) => matchBucketFilter(item, id)).length;
+          cnt.textContent = String(n);
+        }
+      });
+    });
   }
 
   // ── Apps ──
@@ -2688,24 +2798,74 @@
 
   function renderAppFailures(tabBody, detail) {
     const fails = detail.failures || [];
+    function matchFailFilter(f, filter) {
+      if (!filter || filter === 'all') return true;
+      if (filter === 'dev') {
+        return (
+          f.actionable === 'dev' ||
+          f.bucket === 'code' ||
+          f.bucket === 'element' ||
+          f.bucket === 'data_config'
+        );
+      }
+      if (filter === 'ops') {
+        return f.actionable === 'ops' || f.bucket === 'env_robot' || f.bucket === 'schedule';
+      }
+      return f.bucket === filter;
+    }
+    function listHtml(filter) {
+      const list = fails.filter((f) => matchFailFilter(f, filter));
+      if (!list.length) {
+        return empty(filter === 'dev' ? '无代码/配置类失败' : '无失败记录');
+      }
+      return `<div class="list">${list
+        .map((f) =>
+          failureRowHtml(f, {
+            extraSub: `<div class="item-sub">${esc(f.flowName || '未知流程')} · ${esc(
+              f.errorType || '',
+            )} · ${esc(relTime(f.lastSeen))}</div>
+            <div class="item-sub wrap">${esc((f.rawRemark || '').slice(0, 240))}</div>`,
+          }),
+        )
+        .join('')}</div>`;
+    }
+    const chips = [
+      { id: 'all', label: '全部' },
+      { id: 'dev', label: '可开发' },
+      { id: 'ops', label: '环境/调度' },
+    ];
+    let filter = 'all';
     tabBody.innerHTML = `
       <div class="panel">
-        <h2>相关问题 <span class="meta">${fails.length}</span></h2>
+        <h2>相关问题 <span class="meta" id="app-fail-count">${fails.length}</span></h2>
         ${
           fails.length
-            ? `<div class="list">${fails
-                .map((f) =>
-                  failureRowHtml(f, {
-                    extraSub: `<div class="item-sub">${esc(f.flowName || '未知流程')} · ${esc(
-                      f.errorType || '',
-                    )} · ${esc(relTime(f.lastSeen))}</div>
-                    <div class="item-sub wrap">${esc((f.rawRemark || '').slice(0, 240))}</div>`,
-                  }),
-                )
-                .join('')}</div>`
+            ? `<div class="chip-row bucket-filters mb-sm" role="toolbar" aria-label="分流筛选">
+                ${chips
+                  .map(
+                    (c) =>
+                      `<button type="button" class="chip bucket-chip ${
+                        c.id === filter ? 'active' : ''
+                      }" data-app-bucket="${esc(c.id)}">${esc(c.label)}</button>`,
+                  )
+                  .join('')}
+              </div>
+              <div id="app-fail-list">${listHtml(filter)}</div>`
             : empty('无失败记录')
         }
       </div>`;
+    tabBody.querySelectorAll('[data-app-bucket]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        filter = btn.getAttribute('data-app-bucket') || 'all';
+        tabBody.querySelectorAll('[data-app-bucket]').forEach((b) => {
+          b.classList.toggle('active', b.getAttribute('data-app-bucket') === filter);
+        });
+        const host = tabBody.querySelector('#app-fail-list');
+        if (host) host.innerHTML = listHtml(filter);
+        const cnt = tabBody.querySelector('#app-fail-count');
+        if (cnt) cnt.textContent = String(fails.filter((f) => matchFailFilter(f, filter)).length);
+      });
+    });
   }
 
   async function renderFinding(fingerprint) {
@@ -2737,6 +2897,11 @@
 
     if (robotUuid) pushRecentApp(robotUuid, appName);
 
+    const work = data.work || {};
+    const workStatus = work.status || f.workStatus || 'open';
+    const workLabel = work.label || '待处理';
+    const snoozeDays = work.defaultSnoozeDays || 3;
+
     const hasDiagText = !!(d.rootCause || k.rootCause || d.suggestion || k.solution);
     let includeDiagnose = false;
     let handoffRes = await fetchHandoff({
@@ -2751,8 +2916,15 @@
       f.robotName || fingerprint,
       `${f.errorType || ''} · ${f.diagnosed ? '已诊断' : '未诊断'}${
         g && g.title ? ` · ${g.title}` : ''
-      }`,
+      } · ${workLabel}`,
     );
+
+    const workBadgeCls =
+      workStatus === 'ignored'
+        ? 'badge'
+        : workStatus === 'snoozed'
+          ? 'badge warn'
+          : 'badge ok';
 
     content.innerHTML = `
       <div class="crumb">
@@ -2776,6 +2948,30 @@
       <div class="panel">
         <div class="badges" style="justify-content:flex-start;margin-bottom:10px">
           ${f.diagnosed ? '<span class="badge ok">已诊断</span>' : '<span class="badge warn">未诊断</span>'}
+          <span class="${workBadgeCls}" title="处置态：仅影响优先处理列表">${esc(workLabel)}</span>
+          ${
+            work.ignoredStillFailing
+              ? '<span class="badge warn" title="忽略后仍有新失败 job">忽略后仍失败</span>'
+              : ''
+          }
+          ${
+            work.reopenedBy === 'new_job'
+              ? '<span class="badge warn">新失败已拉回</span>'
+              : work.reopenedBy === 'regressed'
+                ? '<span class="badge danger">修复复发</span>'
+                : ''
+          }
+          ${
+            data.bucket && data.bucket.label
+              ? `<span class="badge ${
+                  data.bucket.actionable === 'ops'
+                    ? 'warn'
+                    : data.bucket.actionable === 'dev'
+                      ? 'ok'
+                      : ''
+                }" title="${esc(data.bucket.reason || '技术分流')}">${esc(data.bucket.label)}</span>`
+              : ''
+          }
           ${g && g.title ? `<span class="badge">${esc(g.title)}</span>` : ''}
           ${f.occurrenceCount ? `<span class="badge">${esc(f.occurrenceCount)} 次</span>` : ''}
         </div>
@@ -2784,6 +2980,16 @@
           <div class="k">指纹</div><div class="v mono">${esc(fingerprint)}</div>
           <div class="k">流程</div><div class="v">${esc(f.flowName || '—')} L${esc(f.lineNumber || '?')}</div>
           <div class="k">错误</div><div class="v">${esc(f.errorType || '—')}</div>
+          <div class="k">处置</div><div class="v">${esc(workLabel)}${
+            work.snoozedUntil ? ` · 至 ${esc(relTime(work.snoozedUntil))}` : ''
+          }</div>
+          <div class="k">分流</div><div class="v">${esc(
+            (data.bucket && data.bucket.label) || '—',
+          )}${
+            data.bucket && data.bucket.actionable === 'ops'
+              ? ' <span class="hint">（优先查环境/调度，勿先改代码）</span>'
+              : ''
+          }</div>
           <div class="k">分诊</div><div class="v">${esc(triage.fixClass || '—')} / ${esc(triage.fixability || '—')}</div>
           <div class="k">最近</div><div class="v">${esc(relTime(f.lastSeen))}</div>
         </div>
@@ -2798,6 +3004,20 @@
               ? `<button type="button" class="btn ghost" data-action="fix-dry-run" data-fp="${esc(fingerprint)}">预览修复</button>`
               : ''
           }
+        </div>
+        <div class="actions mt work-status-actions">
+          <span class="hint" style="margin-right:8px">处置（只影响优先列表）</span>
+          ${
+            workStatus !== 'open'
+              ? `<button type="button" class="btn sm" data-work="open" data-fp="${esc(fingerprint)}">恢复待处理</button>`
+              : ''
+          }
+          <button type="button" class="btn sm ghost" data-work="snoozed" data-fp="${esc(
+            fingerprint,
+          )}" title="默认 ${snoozeDays} 天；期间新失败会拉回待处理">稍后 ${esc(snoozeDays)} 天</button>
+          <button type="button" class="btn sm ghost" data-work="ignored" data-fp="${esc(
+            fingerprint,
+          )}" title="不再进优先列表；新失败默认不拉回（修复复发除外）">不再提醒</button>
         </div>
       </div>
 
@@ -2872,6 +3092,41 @@
       bindOpenAgentControls(content, { robotUuid, prompt: agentPrompt });
     }
     bindFindingHandoffControls();
+
+    content.querySelectorAll('[data-work]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const st = btn.getAttribute('data-work');
+        const fp = btn.getAttribute('data-fp') || fingerprint;
+        if (!st || !fp) return;
+        btn.disabled = true;
+        try {
+          const r = await api(`/api/findings/${encodeURIComponent(fp)}/work-status`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              status: st,
+              snoozeDays: st === 'snoozed' ? snoozeDays : undefined,
+            }),
+          });
+          if (r.ok) {
+            toast(
+              st === 'snoozed'
+                ? `已稍后处理 ${snoozeDays} 天`
+                : st === 'ignored'
+                  ? '已不再提醒（不进优先列表）'
+                  : '已恢复待处理',
+            );
+            await renderFinding(fp);
+          } else {
+            toast(r.message || r.code || '设置失败');
+            btn.disabled = false;
+          }
+        } catch (e) {
+          toast(e.message || '设置失败');
+          btn.disabled = false;
+        }
+      });
+    });
 
     bindActionButtons(content);
     content.querySelectorAll('[data-patch]').forEach((btn) => {
