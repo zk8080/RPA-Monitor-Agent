@@ -1364,6 +1364,68 @@
     }
   }
 
+  /** 手动触发 poll（POST /api/poll），与定时轮询同一逻辑 */
+  async function triggerPollNow(btn) {
+    const el = btn || $('#btn-poll-now') || $('#btn-poll-home');
+    if (el && el.disabled) return;
+    const idleLabel =
+      el && el.id === 'btn-poll-home' ? '立即拉取' : el && el.id === 'btn-poll-now' ? '立即拉取' : '立即拉取';
+    if (el) {
+      el.disabled = true;
+      el.textContent = '拉取中…';
+      el.classList.add('busy');
+    }
+    toast('正在从影刀拉取最新记录（可能需数十秒）…', 8000);
+    let pollOk = false;
+    try {
+      const r = await api('/api/poll', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{}',
+      });
+      if (r && r.ok) {
+        pollOk = true;
+        const s = r.stats || {};
+        // 注意：stats.failed = 影刀失败任务数，不是「本次请求失败」
+        const parts = [
+          '拉取完成',
+          `扫描 ${s.scanned ?? 0}`,
+          `失败任务 ${s.failed ?? 0}`,
+          `新入队 ${s.enqueued ?? 0}`,
+          `更新 ${s.updated ?? 0}`,
+        ];
+        if (s.urgent) parts.push(`紧急 ${s.urgent}`);
+        if (s.truncated) parts.push('已达翻页上限');
+        toast(parts.join(' · '), 5000);
+        // 刷新 UI 失败不应掩盖「拉取已成功」（lastPollAt 已更新）
+        try {
+          await refreshRuntime();
+          if (location.hash === '' || location.hash === '#' || location.hash === '#/') {
+            await route();
+          }
+        } catch (refreshErr) {
+          toast(
+            `拉取已成功，但页面刷新失败：${refreshErr.message || refreshErr}。可点顶部「刷新」`,
+            6000,
+          );
+        }
+      } else {
+        const msg = (r && (r.message || r.code)) || '未知错误';
+        toast(`拉取未完成：${msg}`, 6000);
+      }
+    } catch (e) {
+      // 网络中断等：若服务端已跑完 poll，时间可能已变；提示以接口为准
+      toast(`拉取未完成：${e.message || '网络或服务异常'}`, 6000);
+    } finally {
+      if (el) {
+        el.disabled = false;
+        el.textContent = idleLabel;
+        el.classList.remove('busy');
+      }
+    }
+    return pollOk;
+  }
+
   /** 触发浏览器下载文本文件 */
   function downloadTextFile(filename, text, mime = 'text/markdown;charset=utf-8') {
     const blob = new Blob([text], { type: mime });
@@ -2153,10 +2215,75 @@
     const q = data.queue || {};
     const problems = data.problemApps || [];
     const cross = data.crossAppGroups || [];
+    const priority = data.priorityQueue || [];
     const und = q.undiagnosed ?? 0;
     const recent = getRecentApps();
 
     if (la.usersRoot) setActiveHandoff({ path: la.usersRoot });
+
+    const priorityPanel = `
+      <div class="panel mb panel-priority">
+        <h2>今日优先 <span class="meta">${priority.length}</span></h2>
+        <p class="hint mb-sm">按未诊断 → 复发 → 跨应用 → 可预览修 → 高频排序，点进问题详情处理。</p>
+        ${
+          priority.length
+            ? `<div class="list">${priority
+                .map((item, idx) => {
+                  const href = `#/findings/${encodeURIComponent(item.fingerprint)}`;
+                  const appName = String(item.robotName || item.robotUuid || '').trim();
+                  const taskName = String(item.taskName || '').trim();
+                  const appLabel =
+                    taskName && appName && taskName !== appName
+                      ? `${taskName}（${appName}）`
+                      : taskName || appName || '未知应用';
+                  const flow =
+                    item.flowName && !/^(unknown-flow|no-flow)$/i.test(String(item.flowName).trim())
+                      ? item.flowName
+                      : '';
+                  const titleBits = [flow, item.errorType].filter(Boolean);
+                  const title =
+                    titleBits.join(' · ') ||
+                    String(item.fingerprint || '').slice(0, 48) ||
+                    '失败';
+                  const time = item.lastSeen ? relTime(item.lastSeen) : '';
+                  const occ =
+                    item.occurrenceCount > 1 ? `${item.occurrenceCount} 次` : '';
+                  const sub = [appLabel, time, occ].filter(Boolean).join(' · ');
+                  const badges = (item.reasonLabels || [])
+                    .map((lab, i) => {
+                      const reason = (item.reasons && item.reasons[i]) || '';
+                      const cls =
+                        reason === 'undiagnosed' || reason === 'regressed'
+                          ? 'badge warn'
+                          : reason === 'cross_app'
+                            ? 'badge danger'
+                            : reason === 'can_preview'
+                              ? 'badge ok'
+                              : 'badge';
+                      return `<span class="${cls}">${esc(lab)}</span>`;
+                    })
+                    .join('');
+                  return `<a class="list-item" href="${href}">
+                    <div class="item-main">
+                      <div class="item-title"><span class="priority-rank">${idx + 1}</span>${esc(
+                        title,
+                      )}</div>
+                      ${sub ? `<div class="item-sub">${esc(sub)}</div>` : ''}
+                    </div>
+                    <div class="item-side">
+                      <div class="badges">${badges}</div>
+                      <span class="item-go">处理 →</span>
+                    </div>
+                  </a>`;
+                })
+                .join('')}</div>`
+            : empty(
+                '暂无优先项',
+                '队列空，或条目均已诊断且无跨应用/复发/高频信号',
+                '<a class="btn sm" href="#/apps">浏览应用</a>',
+              )
+        }
+      </div>`;
 
     content.innerHTML = `
       ${firstRunTipHtml()}
@@ -2177,6 +2304,13 @@
           <div class="hint">≥2 应用同特征</div>
         </div>
       </div>
+
+      <div class="actions mb home-poll-actions">
+        <button type="button" class="btn primary" id="btn-poll-home" title="立即从影刀 OpenAPI 拉最新运行记录（与定时 poll 相同，不自动诊断）">立即拉取</button>
+        <span class="hint" id="poll-home-hint">看到影刀后台有新失败时可手动拉一轮；成功后会更新 poll 时间。默认最近 24h，可能需数十秒。</span>
+      </div>
+
+      ${priorityPanel}
 
       ${
         recent.length
@@ -2301,6 +2435,10 @@
     `;
 
     bindFirstRunTip();
+    const pollHome = $('#btn-poll-home');
+    if (pollHome) {
+      pollHome.onclick = () => triggerPollNow(pollHome);
+    }
   }
 
   // ── Apps ──
@@ -3331,6 +3469,11 @@
 
   window.addEventListener('hashchange', () => route());
   $('#btn-refresh').addEventListener('click', () => route());
+
+  const pollNowBtn = $('#btn-poll-now');
+  if (pollNowBtn) {
+    pollNowBtn.addEventListener('click', () => triggerPollNow(pollNowBtn));
+  }
 
   const helpBtn = $('#btn-help');
   if (helpBtn) helpBtn.addEventListener('click', () => showHelpTip());

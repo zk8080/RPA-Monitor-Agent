@@ -6,7 +6,13 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const http = require('http');
-const { aggregateFailuresByRobot, buildOverview, listAppsWithStats, getAppDetail } = require('./lib/workbench');
+const {
+  aggregateFailuresByRobot,
+  buildOverview,
+  buildPriorityQueue,
+  listAppsWithStats,
+  getAppDetail,
+} = require('./lib/workbench');
 const { assertOpenableDir } = require('./lib/http/open-path');
 const { handleRequest } = require('./lib/http/routes');
 const understandCache = require('./lib/understand-cache');
@@ -36,6 +42,71 @@ assert.strictEqual(agg.get('r1').failureCount, 2);
 assert.strictEqual(agg.get('r1').undiagnosedCount, 1);
 assert.strictEqual(agg.get('r1').lastSeen, '2026-07-12T11:00:00.000Z');
 assert.strictEqual(agg.get('r2').failureCount, 1);
+
+// --- priority queue ranking ---
+const pq = buildPriorityQueue(
+  [
+    {
+      fingerprint: 'fp-diag-high',
+      robotUuid: 'r-a',
+      robotName: 'A',
+      diagnosed: true,
+      occurrenceCount: 8,
+      errorType: '超时',
+      lastSeen: '2026-07-12T08:00:00.000Z',
+    },
+    {
+      fingerprint: 'fp-undiag',
+      robotUuid: 'r-b',
+      robotName: 'B',
+      diagnosed: false,
+      occurrenceCount: 1,
+      errorType: '元素未找到',
+      lastSeen: '2026-07-12T07:00:00.000Z',
+    },
+    {
+      fingerprint: 'fp-regressed',
+      robotUuid: 'r-c',
+      robotName: 'C',
+      diagnosed: true,
+      occurrenceCount: 2,
+      fixStatus: 'regressed',
+      errorType: 'IndexError',
+      lastSeen: '2026-07-12T09:00:00.000Z',
+    },
+    {
+      fingerprint: 'fp-cross',
+      robotUuid: 'r-d',
+      robotName: 'D',
+      diagnosed: true,
+      occurrenceCount: 1,
+      errorSignature: 'flow|err|el',
+      errorType: '元素未找到',
+      lastSeen: '2026-07-12T06:00:00.000Z',
+    },
+    {
+      fingerprint: 'fp-quiet',
+      robotUuid: 'r-e',
+      robotName: 'E',
+      diagnosed: true,
+      occurrenceCount: 1,
+      errorType: 'other',
+      lastSeen: '2026-07-12T10:00:00.000Z',
+    },
+  ],
+  {
+    limit: 10,
+    crossFpSet: new Set(['fp-cross']),
+    patchIndex: new Map(),
+  },
+);
+assert.ok(pq.length >= 4);
+assert.strictEqual(pq[0].fingerprint, 'fp-undiag', '未诊断应排最前');
+assert.strictEqual(pq[1].fingerprint, 'fp-regressed', '复发次之');
+assert.ok(pq.some((x) => x.fingerprint === 'fp-cross' && x.reasons.includes('cross_app')));
+assert.ok(pq.some((x) => x.fingerprint === 'fp-diag-high' && x.reasons.includes('high_occurrence')));
+assert.ok(!pq.some((x) => x.fingerprint === 'fp-quiet'), '无优先信号应剔除');
+assert.ok(pq[0].reasonLabels.includes('未诊断'));
 
 // --- open path guard ---
 const bad = assertOpenableDir(path.join(os.tmpdir(), 'no-such-xbot-dir-xyz'));
@@ -85,6 +156,11 @@ const overview = buildOverview(cfg, { startedAt: Date.now() - 5000, lastPollAt: 
 assert.strictEqual(overview.ok, true);
 assert.ok(overview.queue.depth >= 1);
 assert.ok(overview.problemApps.some((p) => p.robotUuid === 'r-demo'));
+assert.ok(Array.isArray(overview.priorityQueue), 'overview 应含 priorityQueue');
+assert.ok(
+  overview.priorityQueue.some((p) => p.fingerprint === 'fp1' && p.reasons.includes('undiagnosed')),
+  '未诊断条目应进今日优先',
+);
 
 const apps = listAppsWithStats(cfg);
 assert.strictEqual(apps.ok, true);
@@ -140,10 +216,52 @@ const state = { startedAt: Date.now(), lastPollAt: null, lastDiagnoseAt: null, l
   assert.strictEqual(ov.status, 200);
   assert.strictEqual(JSON.parse(ov.body).ok, true);
 
+  // 手动 poll 路由存在：handleRequest 会热读 loadConfig()（可能有本机密钥）
+  // 有密钥则可能 200 真 poll；无密钥 400；busy 409 —— 只要不 404/崩
+  const pollRes = await new Promise((resolve, reject) => {
+    const addr = server.address();
+    const body = JSON.stringify({ lookbackHours: 1, maxPages: 1, enrichLogs: false });
+    const req = http.request(
+      {
+        host: '127.0.0.1',
+        port: addr.port,
+        path: '/api/poll',
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'content-length': Buffer.byteLength(body),
+        },
+      },
+      (res) => {
+        const chunks = [];
+        res.on('data', (c) => chunks.push(c));
+        res.on('end', () => {
+          resolve({
+            status: res.statusCode,
+            body: Buffer.concat(chunks).toString('utf8'),
+          });
+        });
+      },
+    );
+    req.on('error', reject);
+    req.write(body);
+    req.end();
+  });
+  assert.notStrictEqual(pollRes.status, 404);
+  const pollJson = JSON.parse(pollRes.body);
+  assert.ok(typeof pollJson.ok === 'boolean');
+  if (pollJson.ok) {
+    assert.strictEqual(pollJson.action, 'poll');
+    assert.ok(pollJson.stats && typeof pollJson.stats.scanned === 'number');
+  } else {
+    assert.ok(pollJson.message || pollJson.code);
+  }
+
   const index = await request(server, 'GET', '/');
   assert.strictEqual(index.status, 200);
   assert.ok(String(index.headers['content-type'] || '').includes('text/html'));
   assert.ok(index.body.includes('RPA'));
+  assert.ok(index.body.includes('btn-poll-now') || index.body.includes('立即拉取'));
 
   // S25b routes exist
   const findingMiss = await request(server, 'GET', '/api/findings/no-such-fp');

@@ -140,6 +140,159 @@ function invalidateAppsCache() {
   memCache = null;
 }
 
+/** 优先原因权重：未诊断 > 复发 > 跨应用 > 可预览修 > 高频 */
+const PRIORITY_WEIGHTS = {
+  undiagnosed: 1000,
+  regressed: 800,
+  cross_app: 600,
+  can_preview: 400,
+  high_occurrence: 200,
+};
+
+const PRIORITY_LABELS = {
+  undiagnosed: '未诊断',
+  regressed: '复发',
+  cross_app: '跨应用',
+  can_preview: '可预览修',
+  high_occurrence: '高频',
+};
+
+/**
+ * 从 patch 列表建 fingerprint 索引（regressed / planned dry-run）
+ * @param {object[]} patches
+ * @returns {Map<string, { regressed: boolean, planned: boolean, pendingVerify: boolean }>}
+ */
+function indexPatchesByFingerprint(patches) {
+  const map = new Map();
+  for (const p of patches || []) {
+    const fp = p && p.fingerprint;
+    if (!fp) continue;
+    let row = map.get(fp);
+    if (!row) {
+      row = { regressed: false, planned: false, pendingVerify: false };
+      map.set(fp, row);
+    }
+    const st = String(p.status || '');
+    if (st === 'regressed') row.regressed = true;
+    if (st === 'fixed_pending_verify') row.pendingVerify = true;
+    if (st === 'planned' || (p.dryRun === true && st !== 'applied' && st !== 'rolled_back')) {
+      row.planned = true;
+    }
+  }
+  return map;
+}
+
+/**
+ * 跨应用组 → fingerprint 集合
+ * @param {Array<{ fingerprints?: string[] }>} groups
+ */
+function crossFingerprintSet(groups) {
+  const set = new Set();
+  for (const g of groups || []) {
+    for (const fp of g.fingerprints || []) {
+      if (fp) set.add(fp);
+    }
+  }
+  return set;
+}
+
+/**
+ * 今日优先队列：按失败指纹排序，告诉人「先处理谁」
+ * 排序：未诊断 > 复发 > 跨应用 > 可预览修 > 高频 occurrence；同分按失败时间新→旧
+ *
+ * @param {object[]} queueItems
+ * @param {{
+ *   limit?: number,
+ *   crossFpSet?: Set<string>,
+ *   patchIndex?: Map<string, { regressed?: boolean, planned?: boolean }>,
+ *   minOccurrenceHigh?: number,
+ *   nameResolver?: (item: object) => { robotName?: string, taskName?: string },
+ * }} [opts]
+ * @returns {object[]}
+ */
+function buildPriorityQueue(queueItems, opts = {}) {
+  const limit = opts.limit > 0 ? opts.limit : 10;
+  const minOcc = opts.minOccurrenceHigh > 0 ? opts.minOccurrenceHigh : 3;
+  const crossSet = opts.crossFpSet || new Set();
+  const patchIndex = opts.patchIndex || new Map();
+  const nameResolver =
+    typeof opts.nameResolver === 'function' ? opts.nameResolver : () => ({});
+
+  const ranked = [];
+  for (const it of queueItems || []) {
+    if (!it || !it.fingerprint) continue;
+
+    const patchInfo = patchIndex.get(it.fingerprint) || {};
+    const reasons = [];
+    let score = 0;
+
+    if (!it.diagnosed) {
+      reasons.push('undiagnosed');
+      score += PRIORITY_WEIGHTS.undiagnosed;
+    }
+    if (it.fixStatus === 'regressed' || patchInfo.regressed) {
+      reasons.push('regressed');
+      score += PRIORITY_WEIGHTS.regressed;
+    }
+    if (it.errorSignature && crossSet.has(it.fingerprint)) {
+      reasons.push('cross_app');
+      score += PRIORITY_WEIGHTS.cross_app;
+    }
+
+    // 可预览：分诊 canPreview 或已有 planned dry-run（不依赖本机 resolve，避免总览扫盘）
+    let canPreview = false;
+    try {
+      const triage = classifyFix(it, { logs: [] });
+      // 无 appInfo 时 auto 常降为 assisted；有 python 目标才算 canPreviewFix
+      canPreview = canPreviewFix(triage);
+      if (!canPreview && triage.fixability === 'auto') canPreview = true;
+    } catch {
+      canPreview = false;
+    }
+    if (patchInfo.planned) canPreview = true;
+    if (canPreview) {
+      reasons.push('can_preview');
+      score += PRIORITY_WEIGHTS.can_preview;
+    }
+
+    const occ = Number(it.occurrenceCount) || 0;
+    if (occ >= minOcc) {
+      reasons.push('high_occurrence');
+      score += PRIORITY_WEIGHTS.high_occurrence + Math.min(occ, 20) * 5;
+    }
+
+    // 无任何优先信号则跳过（已诊断、单次、非跨应用、无预览）
+    if (!reasons.length) continue;
+
+    const names = nameResolver(it) || {};
+    const failAt = failureTimeOf(it);
+    ranked.push({
+      fingerprint: it.fingerprint,
+      robotUuid: it.robotUuid || null,
+      robotName: names.robotName || it.robotName || it.robotUuid || '',
+      taskName: names.taskName || it.taskName || '',
+      flowName: it.flowName || '',
+      errorType: it.errorType || '',
+      diagnosed: !!it.diagnosed,
+      occurrenceCount: occ,
+      lastSeen: failAt,
+      fixStatus: it.fixStatus || null,
+      canPreviewFix: canPreview,
+      reasons,
+      reasonLabels: reasons.map((r) => PRIORITY_LABELS[r] || r),
+      primaryReason: reasons[0],
+      score,
+    });
+  }
+
+  ranked.sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score;
+    return String(b.lastSeen || '').localeCompare(String(a.lastSeen || ''));
+  });
+
+  return ranked.slice(0, limit);
+}
+
 /**
  * @param {object} cfg
  * @param {{ startedAt?: number, lastPollAt?: string|null, lastDiagnoseAt?: string|null, lastReportAt?: string|null }} state
@@ -179,7 +332,31 @@ function buildOverview(cfg, state = {}) {
     });
 
   // S10b：queue 全量按 errorSignature 归并（≥2 app）
-  const crossAppGroups = mergeByErrorSignature(queueItems, { minApps: 2 }).slice(0, 12);
+  const crossAppGroupsRaw = mergeByErrorSignature(queueItems, { minApps: 2 });
+  const crossAppGroups = crossAppGroupsRaw.slice(0, 12);
+
+  // 今日优先：失败指纹级排序（未诊断 > 复发 > 跨应用 > 可预览 > 高频）
+  let patchIndex = new Map();
+  try {
+    patchIndex = indexPatchesByFingerprint(patchLib.listPatches(cfg.dataDir));
+  } catch {
+    patchIndex = new Map();
+  }
+  const priorityQueue = buildPriorityQueue(queueItems, {
+    limit: 10,
+    crossFpSet: crossFingerprintSet(crossAppGroupsRaw),
+    patchIndex,
+    nameResolver: (it) => {
+      const rid = it.robotUuid;
+      const local = rid ? localByUuid.get(rid) : null;
+      const st = rid ? queueStats.get(rid) : null;
+      const te = rid ? byRobotTask[rid] : null;
+      const merged = mergeTaskNames(st, te, it);
+      const appName =
+        (local && local.name) || it.robotName || (te && te.robotName) || rid || '';
+      return { robotName: appName, taskName: merged.taskName || it.taskName || '' };
+    },
+  });
 
   const startedAt = state.startedAt || Date.now();
 
@@ -202,6 +379,8 @@ function buildOverview(cfg, state = {}) {
       depth: queueItems.length,
       undiagnosed,
     },
+    /** 今日优先处理的失败指纹（最多 10） */
+    priorityQueue,
     problemApps,
     crossAppGroups: crossAppGroups.map((g) => ({
       errorSignature: g.errorSignature,
@@ -767,6 +946,81 @@ async function runWorkbenchAction(action, input, cfg) {
   }
 }
 
+/**
+ * 工作台手动触发 poll（与 CLI `poll.js --once` / service 同一 pollOnce）
+ * 仅确定性拉失败入队，不自动 diagnose、不写盘。
+ *
+ * @param {object} cfg
+ * @param {{ lookbackHours?: number, maxPages?: number, enrichLogs?: boolean }} [input]
+ */
+async function runManualPoll(cfg, input = {}) {
+  if (actionBusy) {
+    return { ok: false, code: 'busy', message: '已有操作进行中（诊断或拉取），请稍后重试' };
+  }
+
+  actionBusy = true;
+  try {
+    // eslint-disable-next-line global-require
+    const { pollOnce } = require('./poll');
+    // eslint-disable-next-line global-require
+    const { requireYingdaoCredentials } = require('./config');
+
+    let liveCfg;
+    try {
+      liveCfg = requireYingdaoCredentials(cfg);
+    } catch (e) {
+      return {
+        ok: false,
+        code: e.code || 'no_credentials',
+        message: e.message || '缺少影刀 OpenAPI 密钥',
+      };
+    }
+
+    const pollOpts = {
+      enrichLogs: input.enrichLogs !== false,
+    };
+    if (input.lookbackHours != null && Number.isFinite(Number(input.lookbackHours))) {
+      pollOpts.lookbackHours = Number(input.lookbackHours);
+    }
+    if (input.maxPages != null && Number.isFinite(Number(input.maxPages))) {
+      pollOpts.maxPages = Number(input.maxPages);
+    }
+
+    const result = await pollOnce(liveCfg, pollOpts);
+    invalidateAppsCache();
+
+    const stats = (result && result.stats) || {};
+    return {
+      ok: true,
+      action: 'poll',
+      polledAt: (result.cursor && result.cursor.lastPollAt) || new Date().toISOString(),
+      stats: {
+        scanned: stats.scanned || 0,
+        failed: stats.failed || 0,
+        enqueued: stats.enqueued || 0,
+        updated: stats.updated || 0,
+        urgent: stats.urgent || 0,
+        enriched: stats.enriched || 0,
+        pages: stats.pages || 0,
+        lookbackHours: stats.lookbackHours || 0,
+        truncated: !!stats.truncated,
+        findings: stats.findings || 0,
+        regressed: stats.regressed || 0,
+        verified: stats.verified || 0,
+      },
+      cursor: result.cursor || null,
+    };
+  } catch (e) {
+    return {
+      ok: false,
+      code: 'poll_error',
+      message: e.message || String(e),
+    };
+  } finally {
+    actionBusy = false;
+  }
+}
+
 function summarizeSkillResult(result) {
   if (!result) return null;
   // 截断 toolTrace / 大字段，避免 HTTP 过大
@@ -1244,6 +1498,11 @@ module.exports = {
   getWorkbenchConfig,
   aggregateFailuresByRobot,
   failureTimeOf,
+  buildPriorityQueue,
+  indexPatchesByFingerprint,
+  crossFingerprintSet,
+  PRIORITY_WEIGHTS,
+  PRIORITY_LABELS,
   buildOverview,
   listAppsWithStats,
   getAppDetail,
@@ -1261,6 +1520,7 @@ module.exports = {
   listPatchesForWorkbench,
   getPatchDetail,
   runWorkbenchAction,
+  runManualPoll,
   listReports,
   getReport,
   generateReport,

@@ -192,6 +192,36 @@ async function handleRequest(req, res, ctx) {
         return true;
       }
 
+      // 手动触发 poll（与 service / CLI 同一 pollOnce；不 diagnose、不 apply）
+      if (method === 'POST' && pathname === '/api/poll') {
+        let body = {};
+        try {
+          const raw = await readBody(req);
+          if (raw) body = JSON.parse(raw);
+        } catch {
+          body = {};
+        }
+        const input = {};
+        if (body.lookbackHours != null) input.lookbackHours = body.lookbackHours;
+        if (body.hours != null && input.lookbackHours == null) input.lookbackHours = body.hours;
+        if (body.maxPages != null) input.maxPages = body.maxPages;
+        if (body.enrichLogs === false || body.noEnrich === true) input.enrichLogs = false;
+
+        const result = await workbench.runManualPoll(cfg, input);
+        if (result.ok && result.polledAt) {
+          state.lastPollAt = result.polledAt;
+        }
+        const status = result.ok
+          ? 200
+          : result.code === 'busy'
+            ? 409
+            : result.code === 'MISSING_CREDENTIALS' || result.code === 'no_credentials'
+              ? 400
+              : 400;
+        sendJson(res, status, result);
+        return true;
+      }
+
       if (method === 'GET' && pathname === '/api/apps') {
         sendJson(res, 200, workbench.listAppsWithStats(cfg));
         return true;
