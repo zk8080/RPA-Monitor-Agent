@@ -1142,6 +1142,104 @@ async function testLlmSettingsFromWeb(cfg, body) {
   return settingsLlm.testLlmConnection(cfg, body && Object.keys(body).length ? body : null);
 }
 
+/**
+ * 导出业务流程 Markdown（仅已缓存 brief，不调 LLM）
+ * @param {string} robotUuid
+ * @param {object} cfg
+ * @param {{ flowName?: string }} [opts]
+ */
+async function exportAppBusinessMarkdown(robotUuid, cfg, opts = {}) {
+  // eslint-disable-next-line global-require
+  const exportDoc = require('./export-flow-doc');
+  const data = await getAppBusinessBrief(robotUuid, cfg, {
+    cacheOnly: true,
+    flowName: opts.flowName || '',
+  });
+  if (!data || data.ok === false) {
+    return {
+      ok: false,
+      code: (data && data.code) || 'export_failed',
+      message: (data && data.message) || '无法导出业务解读',
+      robotUuid,
+    };
+  }
+  if (!data.brief) {
+    return {
+      ok: false,
+      code: 'no_brief',
+      message: '尚未生成业务解读，请先在「业务流程」页生成',
+      robotUuid,
+    };
+  }
+  const pack = {
+    brief: data.brief,
+    appName: data.appName,
+    robotUuid,
+    model: data.model,
+    generatedAt: data.generatedAt,
+    stale: data.stale,
+    disclaimer: data.disclaimer,
+    flowDiagram: data.flowDiagram || data.brief.flowDiagram || null,
+  };
+  return {
+    ok: true,
+    kind: 'business',
+    robotUuid,
+    appName: data.appName,
+    filename: exportDoc.businessExportFilename(pack),
+    markdown: exportDoc.businessBriefToMarkdown(pack),
+  };
+}
+
+/**
+ * 导出实现流程 Markdown（understand 缓存或实时）
+ * @param {string} robotUuid
+ * @param {object} cfg
+ * @param {{ flowName?: string, skipCache?: boolean }} [opts]
+ */
+function exportAppImplMarkdown(robotUuid, cfg, opts = {}) {
+  // eslint-disable-next-line global-require
+  const exportDoc = require('./export-flow-doc');
+  const u = getAppUnderstand(robotUuid, cfg, {
+    flowName: opts.flowName || '',
+    skipCache: opts.skipCache === true,
+  });
+  if (!u.ok) {
+    return {
+      ok: false,
+      code: u.code || 'understand_failed',
+      message: u.message || '无法解析实现流程',
+      robotUuid,
+    };
+  }
+  const r = u.result || {};
+  if (r.ok === false) {
+    return {
+      ok: false,
+      code: 'understand_failed',
+      message: r.reason || r.error || 'understand 未成功',
+      robotUuid,
+    };
+  }
+  const detail = getAppDetail(robotUuid, cfg);
+  const appName = (detail.ok && detail.name) || r.projectName || robotUuid;
+  const pack = {
+    result: r,
+    appName,
+    robotUuid,
+    cached: !!u.cached,
+    xbotDir: u.xbotDir,
+  };
+  return {
+    ok: true,
+    kind: 'impl',
+    robotUuid,
+    appName,
+    filename: exportDoc.implExportFilename(pack),
+    markdown: exportDoc.implFlowToMarkdown(pack),
+  };
+}
+
 module.exports = {
   getWorkbenchConfig,
   aggregateFailuresByRobot,
@@ -1151,6 +1249,8 @@ module.exports = {
   getAppDetail,
   getAppUnderstand,
   getAppBusinessBrief,
+  exportAppBusinessMarkdown,
+  exportAppImplMarkdown,
   openAppFolder,
   openAppWithAgent,
   listOpenAgents,

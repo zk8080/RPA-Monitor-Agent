@@ -1364,6 +1364,342 @@
     }
   }
 
+  /** 触发浏览器下载文本文件 */
+  function downloadTextFile(filename, text, mime = 'text/markdown;charset=utf-8') {
+    const blob = new Blob([text], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename || 'export.md';
+    a.rel = 'noopener';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+  }
+
+  /**
+   * 从 API 拉取 Markdown 并下载
+   * @param {string} apiPath
+   * @param {string} [fallbackName]
+   */
+  async function downloadMarkdownFromApi(apiPath, fallbackName = 'export.md') {
+    const data = await api(apiPath);
+    if (!data || !data.ok || !data.markdown) {
+      throw new Error((data && data.message) || '导出失败');
+    }
+    downloadTextFile(data.filename || fallbackName, data.markdown);
+    return data;
+  }
+
+  /**
+   * 将工作台 Tab 克隆为「文档式」打印页 → 另存为 PDF
+   * - 去掉工具栏 / badge / 源码折叠等 screen chrome
+   * - 单标题，避免 h1 + graph-bar + brief-title 三重标题
+   * - 图解除 max-height，避免 PDF 裁切
+   * @param {string} title
+   * @param {string|HTMLElement} source
+   */
+  function printFlowDocument(title, source) {
+    const node =
+      typeof source === 'string' ? document.querySelector(source) : source;
+    if (!node) {
+      toast('没有可打印的内容');
+      return;
+    }
+
+    const clone = node.cloneNode(true);
+
+    // 去掉工作台 chrome（不是文档内容）
+    clone
+      .querySelectorAll(
+        [
+          '.btn',
+          '.actions',
+          '.no-print',
+          '.graph-bar',
+          '.badge',
+          'details.raw',
+          '.loading-block',
+          '.skeleton-stack',
+          '.loading-label',
+        ].join(','),
+      )
+      .forEach((el) => el.remove());
+
+    // 仅展开「内容型」details；源码 / 原始 JSON 已删
+    clone.querySelectorAll('details').forEach((d) => {
+      d.open = true;
+      d.removeAttribute('style');
+    });
+
+    // 业务解读：用 brief 标题作文档标题，避免页眉 + brief-title 重复
+    let docTitle = String(title || document.title || '导出').trim();
+    const briefTitleEl = clone.querySelector('.brief-title');
+    if (briefTitleEl) {
+      const t = (briefTitleEl.textContent || '').trim();
+      if (t) docTitle = t;
+      briefTitleEl.remove();
+    }
+
+    // 交互残留（全屏缩放）对打印无意义
+    clone.querySelectorAll('[title]').forEach((el) => el.removeAttribute('title'));
+    clone.querySelectorAll('[style]').forEach((el) => {
+      const s = el.getAttribute('style') || '';
+      if (/cursor\s*:/i.test(s)) {
+        el.style.cursor = 'default';
+      }
+    });
+    clone.querySelectorAll('.graph-host').forEach((el) => {
+      el.style.cursor = 'default';
+    });
+
+    // 空壳 panel 清理：去掉只剩空白的容器边距噪音（保留有内容的）
+    clone.querySelectorAll('.panel').forEach((p) => {
+      if (!(p.textContent || '').trim() && !p.querySelector('img, svg, table, canvas')) {
+        p.remove();
+      }
+    });
+
+    const bodyHtml = clone.innerHTML.replace(/<\/script/gi, '<\\/script');
+    if (!bodyHtml.trim()) {
+      toast('没有可打印的内容');
+      return;
+    }
+
+    const cssHref = `${window.location.origin}/styles.css`;
+    // 与 DESIGN.md 对齐的打印文档样式（屏幕 chrome 已剥离）
+    const fullHtml = `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>${esc(docTitle)}</title>
+  <link rel="stylesheet" href="${esc(cssHref)}" />
+  <style>
+    /* 文档页：白底、冷静排版，服务归档而非工作台 UI */
+    html, body {
+      background: #fff !important;
+      color: #0f172a;
+    }
+    body.print-export {
+      margin: 0;
+      padding: 24px 28px 40px;
+      max-width: 920px;
+      font-family: system-ui, "Segoe UI", "PingFang SC", "Microsoft YaHei UI", sans-serif;
+      font-size: 14px;
+      line-height: 1.5;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+    body.print-export .print-export-head {
+      margin: 0 0 20px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid rgba(15, 23, 42, 0.12);
+    }
+    body.print-export .print-export-head h1 {
+      margin: 0;
+      font-size: 22px;
+      font-weight: 600;
+      letter-spacing: -0.03em;
+      line-height: 1.25;
+      color: #0f172a;
+      text-wrap: balance;
+    }
+    body.print-export .print-export-body {
+      min-width: 0;
+    }
+
+    /* 去掉卡片阴影 / 多余边框，变成连续文档 */
+    body.print-export .panel {
+      background: transparent !important;
+      border: none !important;
+      border-radius: 0 !important;
+      box-shadow: none !important;
+      padding: 0 0 18px !important;
+      margin: 0 0 4px !important;
+    }
+    body.print-export details.panel,
+    body.print-export details.fold {
+      margin: 16px 0 0 !important;
+      padding: 14px 0 0 !important;
+      border-top: 1px solid rgba(15, 23, 42, 0.08) !important;
+    }
+    body.print-export details > summary {
+      list-style: none;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: #64748b;
+      margin: 0 0 10px;
+      cursor: default;
+    }
+    body.print-export details > summary::-webkit-details-marker { display: none; }
+
+    body.print-export .btn,
+    body.print-export .actions,
+    body.print-export .badge,
+    body.print-export .graph-bar,
+    body.print-export .no-print { display: none !important; }
+
+    /* 业务解读：页眉已是标题，hero 只留目的与元信息 */
+    body.print-export .brief { gap: 18px; }
+    body.print-export .brief-hero {
+      padding-bottom: 14px;
+      border-bottom: 1px solid rgba(15, 23, 42, 0.08);
+    }
+    body.print-export .brief-purpose {
+      margin: 0;
+      font-size: 14px;
+      line-height: 1.6;
+      color: #334155;
+      max-width: 68ch;
+      text-wrap: pretty;
+    }
+    body.print-export .brief-meta {
+      margin: 10px 0 0;
+      font-size: 12px;
+      color: #64748b;
+    }
+    body.print-export .brief-label {
+      color: #64748b;
+    }
+    body.print-export .brief-diagram-note {
+      font-size: 12px;
+      color: #64748b;
+    }
+
+    /* 图：打印取消屏幕限高，完整出图 */
+    body.print-export .graph,
+    body.print-export .graph.graph-biz,
+    body.print-export .graph.graph-hero {
+      max-height: none !important;
+      min-height: 0 !important;
+      overflow: visible !important;
+      background: #fafbfc !important;
+      border: 1px solid rgba(15, 23, 42, 0.08) !important;
+      box-shadow: none !important;
+      padding: 12px !important;
+      page-break-inside: avoid;
+    }
+    body.print-export .graph-host {
+      max-height: none !important;
+      min-height: 0 !important;
+      overflow: visible !important;
+      cursor: default !important;
+    }
+    body.print-export .graph-host img,
+    body.print-export img.graph-img,
+    body.print-export img.graph-img-biz {
+      display: block;
+      max-width: 100% !important;
+      max-height: none !important;
+      width: auto !important;
+      height: auto !important;
+      margin: 0 auto;
+    }
+
+    body.print-export .summary-line {
+      margin: 0 0 14px;
+      max-width: 72ch;
+      color: #475569;
+    }
+    body.print-export .table { font-size: 12px; }
+    body.print-export .plain-list { margin: 0; }
+    body.print-export h2 {
+      break-after: avoid;
+      page-break-after: avoid;
+    }
+    body.print-export .brief-steps li,
+    body.print-export .brief-list li,
+    body.print-export .plain-list li {
+      break-inside: avoid;
+      page-break-inside: avoid;
+    }
+
+    @page {
+      margin: 14mm 14mm 16mm;
+    }
+    @media print {
+      body.print-export {
+        padding: 0;
+        max-width: none;
+      }
+      body.print-export .print-export-head {
+        margin-bottom: 14px;
+      }
+      /* 大图允许跨页，避免整页留白 */
+      body.print-export .graph {
+        page-break-inside: auto;
+      }
+    }
+  </style>
+</head>
+<body class="print-export">
+  <header class="print-export-head">
+    <h1>${esc(docTitle)}</h1>
+  </header>
+  <div class="print-export-body">${bodyHtml}</div>
+  <script>
+    (function () {
+      var printed = false;
+      function goPrint() {
+        if (printed) return;
+        printed = true;
+        try { window.focus(); window.print(); } catch (e) {}
+      }
+      function whenImagesReady(cb) {
+        var imgs = Array.prototype.slice.call(document.images || []);
+        var settled = false;
+        var finish = function () {
+          if (settled) return;
+          settled = true;
+          cb();
+        };
+        if (!imgs.length) { finish(); return; }
+        var left = imgs.length;
+        var done = function () {
+          left -= 1;
+          if (left <= 0) finish();
+        };
+        imgs.forEach(function (img) {
+          if (img.complete) done();
+          else {
+            img.addEventListener('load', done);
+            img.addEventListener('error', done);
+          }
+        });
+        setTimeout(finish, 4000);
+      }
+      function start() {
+        whenImagesReady(function () { setTimeout(goPrint, 120); });
+      }
+      if (document.readyState === 'complete') start();
+      else window.addEventListener('load', start);
+    })();
+  <\/script>
+</body>
+</html>`;
+
+    let url;
+    try {
+      const blob = new Blob([fullHtml], { type: 'text/html;charset=utf-8' });
+      url = URL.createObjectURL(blob);
+    } catch (e) {
+      toast(`无法生成打印页：${e.message || e}`);
+      return;
+    }
+
+    const w = window.open(url, '_blank');
+    if (!w) {
+      URL.revokeObjectURL(url);
+      toast('浏览器拦截了弹窗，请允许本站弹窗后重试，或使用导出 Markdown');
+      return;
+    }
+    setTimeout(() => URL.revokeObjectURL(url), 120000);
+  }
+
   async function copyText(text, okMsg) {
     const p = String(text || '');
     if (!p) {
@@ -2462,6 +2798,8 @@
             <h2 style="margin:0">业务解读 <span class="badge warn">LLM</span></h2>
           </div>
           <div class="actions">
+            <button type="button" class="btn sm ghost" id="btn-biz-export-md" title="导出 Markdown" disabled>导出 MD</button>
+            <button type="button" class="btn sm ghost" id="btn-biz-export-pdf" title="打印 / 另存为 PDF" disabled>导出 PDF</button>
             <button type="button" class="btn sm primary" id="btn-business-brief">生成解读</button>
             <button type="button" class="btn sm ghost" id="btn-business-brief-refresh" title="忽略缓存重新生成">重新生成</button>
           </div>
@@ -2472,13 +2810,22 @@
       </div>
     `;
 
+    function setBizExportEnabled(on) {
+      ['#btn-biz-export-md', '#btn-biz-export-pdf'].forEach((sel) => {
+        const b = $(sel);
+        if (b) b.disabled = !on;
+      });
+    }
+
     async function renderBriefInto(el, data) {
       if (!el) return;
       if (!data || data.ok === false) {
+        setBizExportEnabled(false);
         el.innerHTML = `<div class="err">${esc((data && (data.message || data.code)) || '解读失败')}</div>`;
         return;
       }
       if (!data.brief) {
+        setBizExportEnabled(false);
         el.innerHTML = `<p class="faint">尚未生成</p>`;
         return;
       }
@@ -2522,7 +2869,7 @@
           : '';
 
       el.innerHTML = `
-        <article class="brief">
+        <article class="brief" data-has-brief="1">
           <header class="brief-hero">
             <h3 class="brief-title">${esc(b.title || '业务解读')}</h3>
             ${
@@ -2657,6 +3004,7 @@
           host.addEventListener('click', openFs);
         }
       }
+      setBizExportEnabled(true);
     }
 
     async function runBusinessBrief(force) {
@@ -2664,6 +3012,7 @@
       const btn = $('#btn-business-brief');
       const btn2 = $('#btn-business-brief-refresh');
       if (bodyEl) bodyEl.innerHTML = loadingHtml(force ? '重新生成业务解读…' : '生成业务解读…');
+      setBizExportEnabled(false);
       [btn, btn2].forEach((b) => {
         if (b) b.disabled = true;
       });
@@ -2676,8 +3025,12 @@
         await renderBriefInto(bodyEl, data);
         if (data && data.ok && data.brief) {
           toast(data.cached ? '已加载保存的解读' : '业务解读已生成并保存');
-        } else toast((data && data.message) || '解读失败');
+        } else {
+          setBizExportEnabled(false);
+          toast((data && data.message) || '解读失败');
+        }
       } catch (e) {
+        setBizExportEnabled(false);
         if (bodyEl) bodyEl.innerHTML = `<div class="err">${esc(e.message || e)}</div>`;
         toast(e.message || '解读失败');
       } finally {
@@ -2692,13 +3045,48 @@
     const briefRefresh = $('#btn-business-brief-refresh');
     if (briefRefresh) briefRefresh.onclick = () => runBusinessBrief(true);
 
+    const bizMdBtn = $('#btn-biz-export-md');
+    if (bizMdBtn) {
+      bizMdBtn.onclick = async () => {
+        bizMdBtn.disabled = true;
+        try {
+          await downloadMarkdownFromApi(
+            `/api/apps/${encodeURIComponent(robotUuid)}/export/business`,
+            '业务解读.md',
+          );
+          toast('已导出 Markdown');
+        } catch (e) {
+          toast(e.message || '导出失败');
+        } finally {
+          setBizExportEnabled(true);
+        }
+      };
+    }
+    const bizPdfBtn = $('#btn-biz-export-pdf');
+    if (bizPdfBtn) {
+      bizPdfBtn.onclick = () => {
+        const bodyEl = $('#business-brief-body');
+        const t =
+          (bodyEl && bodyEl.querySelector('.brief-title')?.textContent) ||
+          detail.name ||
+          '业务解读';
+        printFlowDocument(`业务解读 · ${t}`, '#business-brief-panel');
+      };
+    }
+
     // 进入页面自动加载本机已保存解读（不调 LLM）
     (async () => {
       const bodyEl = $('#business-brief-body');
       try {
         const data = await api(`/api/apps/${encodeURIComponent(robotUuid)}/business-brief`);
-        await renderBriefInto(bodyEl, data);
+        if (data && data.ok && data.brief) {
+          await renderBriefInto(bodyEl, data);
+        } else {
+          setBizExportEnabled(false);
+          if (bodyEl) bodyEl.innerHTML = '<p class="faint">尚未生成</p>';
+        }
       } catch {
+        setBizExportEnabled(false);
         if (bodyEl) {
           bodyEl.innerHTML = '<p class="faint">尚未生成</p>';
         }
@@ -2747,6 +3135,7 @@
     const edges = (r.callGraph && r.callGraph.edges) || [];
 
     tabBody.innerHTML = `
+      <div id="impl-flow-export-root">
       <div class="panel" id="impl-call-graph-panel">
         <div class="graph-bar">
           <div>
@@ -2756,6 +3145,8 @@
             )}</p>
           </div>
           <div class="actions">
+            <button type="button" class="btn sm ghost" id="btn-impl-export-md" title="导出 Markdown">导出 MD</button>
+            <button type="button" class="btn sm ghost" id="btn-impl-export-pdf" title="打印 / 另存为 PDF">导出 PDF</button>
             ${
               mermaidSrc
                 ? `<button type="button" class="btn sm primary" id="btn-graph-fs">全屏查看</button>`
@@ -2839,14 +3230,40 @@
           : ''
       }
 
-      <details class="panel mt fold raw">
+      <details class="panel mt fold raw no-print">
         <summary>原始 JSON</summary>
         <div class="pre mt">${esc(JSON.stringify(r, null, 2))}</div>
       </details>
+      </div>
     `;
 
     const refreshBtn = tabBody.querySelector('[data-refresh-flow]');
     if (refreshBtn) refreshBtn.onclick = () => renderAppImplFlow(robotUuid, detail, true);
+
+    const implMdBtn = $('#btn-impl-export-md');
+    if (implMdBtn) {
+      implMdBtn.onclick = async () => {
+        implMdBtn.disabled = true;
+        try {
+          await downloadMarkdownFromApi(
+            `/api/apps/${encodeURIComponent(robotUuid)}/export/impl`,
+            '实现流程.md',
+          );
+          toast('已导出 Markdown');
+        } catch (e) {
+          toast(e.message || '导出失败');
+        } finally {
+          implMdBtn.disabled = false;
+        }
+      };
+    }
+    const implPdfBtn = $('#btn-impl-export-pdf');
+    if (implPdfBtn) {
+      implPdfBtn.onclick = () => {
+        const t = r.projectName || detail.name || '实现流程';
+        printFlowDocument(`实现流程 · ${t}`, '#impl-flow-export-root');
+      };
+    }
 
     if (mermaidSrc) {
       const preview = $('#mermaid-host');

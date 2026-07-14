@@ -240,6 +240,31 @@ async function handleRequest(req, res, ctx) {
         return true;
       }
 
+      // 导出 Markdown：业务流程 / 实现流程
+      const appExportBiz = pathname.match(
+        /^\/api\/apps\/([^/]+)\/export\/business(?:\.md)?\/?$/,
+      );
+      if (method === 'GET' && appExportBiz) {
+        const robotUuid = decodeURIComponent(appExportBiz[1]);
+        const result = await workbench.exportAppBusinessMarkdown(robotUuid, cfg, {
+          flowName: url.searchParams.get('flowName') || '',
+        });
+        sendJson(res, result.ok ? 200 : result.code === 'no_brief' ? 404 : 400, result);
+        return true;
+      }
+      const appExportImpl = pathname.match(
+        /^\/api\/apps\/([^/]+)\/export\/impl(?:\.md)?\/?$/,
+      );
+      if (method === 'GET' && appExportImpl) {
+        const robotUuid = decodeURIComponent(appExportImpl[1]);
+        const result = workbench.exportAppImplMarkdown(robotUuid, cfg, {
+          flowName: url.searchParams.get('flowName') || '',
+          skipCache: url.searchParams.get('refresh') === '1',
+        });
+        sendJson(res, result.ok ? 200 : 404, result);
+        return true;
+      }
+
       const appOpen = pathname.match(/^\/api\/apps\/([^/]+)\/open-folder\/?$/);
       if (method === 'POST' && appOpen) {
         const robotUuid = decodeURIComponent(appOpen[1]);

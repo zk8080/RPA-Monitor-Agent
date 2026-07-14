@@ -1654,6 +1654,50 @@ details.fold[open] > summary::before { content: "▾ "; }
   }
 }
 
+@media print {
+  .sidebar,
+  .skip-link,
+  #toast,
+  .header-actions,
+  .sidebar-actions,
+  .no-print,
+  .nav,
+  .sidebar-bottom {
+    display: none !important;
+  }
+  .app {
+    display: block;
+    min-height: 0;
+  }
+  .main {
+    margin: 0;
+    width: 100%;
+  }
+  .header {
+    padding: 8px 0;
+    border: 0;
+  }
+  .canvas {
+    padding: 0;
+  }
+  .content {
+    max-width: none;
+  }
+  .btn,
+  .actions {
+    display: none !important;
+  }
+  details.fold,
+  details.raw {
+    break-inside: avoid;
+  }
+  .graph-host img,
+  img.graph-img {
+    max-width: 100% !important;
+    height: auto !important;
+  }
+}
+
 /* Settings (S26 LLM) */
 .settings-form { display: flex; flex-direction: column; gap: 14px; margin-top: 8px; }
 .field { display: flex; flex-direction: column; gap: 6px; }
