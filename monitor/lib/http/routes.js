@@ -161,6 +161,46 @@ async function handleRequest(req, res, ctx) {
         return true;
       }
 
+      // 钉钉机器人晨报
+      if (method === 'GET' && pathname === '/api/settings/dingtalk') {
+        sendJson(res, 200, workbench.getDingtalkSettings(cfg));
+        return true;
+      }
+      if (method === 'PUT' && pathname === '/api/settings/dingtalk') {
+        let body = {};
+        try {
+          const raw = await readBody(req);
+          if (raw) body = JSON.parse(raw);
+        } catch {
+          sendJson(res, 400, { ok: false, code: 'bad_json', message: '请求体须为 JSON' });
+          return true;
+        }
+        const result = workbench.saveDingtalkSettingsFromWeb(cfg, body);
+        const status = result.ok ? 200 : result.code === 'settings_disabled' ? 403 : 400;
+        sendJson(res, status, result);
+        return true;
+      }
+      if (method === 'POST' && pathname === '/api/settings/dingtalk/test') {
+        // force：忽略 enabled，用当前已保存配置发一条晨报（测通）
+        const result = await workbench.sendDingtalkDigestFromWeb(cfg, { force: true });
+        sendJson(
+          res,
+          result.ok ? 200 : result.code === 'settings_disabled' ? 403 : 400,
+          result,
+        );
+        return true;
+      }
+      if (method === 'POST' && pathname === '/api/settings/dingtalk/send') {
+        // 正式发送：须 enabled
+        const result = await workbench.sendDingtalkDigestFromWeb(cfg, { force: false });
+        sendJson(
+          res,
+          result.ok ? 200 : result.code === 'settings_disabled' ? 403 : 400,
+          result,
+        );
+        return true;
+      }
+
       // 业务解读提示词模板
       if (method === 'GET' && pathname === '/api/settings/business-brief') {
         sendJson(res, 200, workbench.getBusinessBriefPromptSettings(cfg));

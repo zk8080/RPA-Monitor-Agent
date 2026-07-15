@@ -61,9 +61,34 @@ function printHelp() {
   - 每轮 poll 后 drain 未诊断队列（limit）
   - 默认是否 LLM：settings.llm.json 的 diagnoseUseLlm（可用 --llm / --no-llm 覆盖）
   - diagnoseCron / reportCron（分 时 * * *）触发额外诊断/日报
+  - 日报后：若启用钉钉（data/settings.dingtalk.json）则推送晨间摘要（无异常也发）
   - healthPort>0 时提供 GET /health + 本机工作台 http://127.0.0.1:<port>/
   - data/service.pid 单实例锁
 `);
+}
+
+async function maybeSendMorningDigest(cfg, logFn) {
+  try {
+    // eslint-disable-next-line global-require
+    const { sendMorningDigest } = require('./lib/morning-digest');
+    // eslint-disable-next-line global-require
+    const settingsDt = require('./lib/settings-dingtalk');
+    const rt = settingsDt.getRuntimeConfig(cfg.dataDir);
+    if (!rt.enabled || !rt.webhookUrl) return;
+    const r = await sendMorningDigest(cfg, { force: false });
+    if (r.skipped) return;
+    if (r.ok) {
+      logFn(
+        `  dingtalk morning ok healthy=${r.stats && r.stats.healthy} total=${
+          r.stats && r.stats.total
+        }`,
+      );
+    } else {
+      logFn(`  dingtalk morning fail: ${r.message || r.code}`);
+    }
+  } catch (e) {
+    logFn(`  dingtalk morning error: ${e && e.message ? e.message : e}`);
+  }
 }
 
 const fs = require('fs');
@@ -164,6 +189,8 @@ async function runPipeline(cfg, opts, label = 'cycle') {
     log(`▶ ${label}: report`);
     reportResult = buildDailyReport(liveCfg, { write: true });
     log(`  report → ${reportResult.filePath} roots=${reportResult.stats.rootCauseCount}`);
+    // 晨间钉钉：日报后固定推送（无异常也发；未启用则跳过）
+    await maybeSendMorningDigest(liveCfg, log);
   }
 
   return { pollResult, diagnoseResult, reportResult };
@@ -284,9 +311,17 @@ async function runPipeline(cfg, opts, label = 'cycle') {
           if (sk && sk !== state.firedReportSlot) {
             state.firedReportSlot = sk;
             log('▶ cron report');
-            const r = buildDailyReport(cfg, { write: true });
+            let liveCfg = cfg;
+            try {
+              // eslint-disable-next-line global-require
+              liveCfg = require('./lib/config').loadConfig();
+            } catch {
+              /* keep */
+            }
+            const r = buildDailyReport(liveCfg, { write: true });
             state.lastReportAt = new Date().toISOString();
             log(`  report → ${r.filePath}`);
+            await maybeSendMorningDigest(liveCfg, log);
           }
         }
       } catch (e) {

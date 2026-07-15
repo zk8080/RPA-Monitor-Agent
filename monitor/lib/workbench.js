@@ -1631,6 +1631,45 @@ function getLlmSettings(cfg) {
   return pub;
 }
 
+/**
+ * 钉钉机器人设置（脱敏 GET / 保存 / 测试发送）
+ */
+function getDingtalkSettings(cfg) {
+  // eslint-disable-next-line global-require
+  const settingsDt = require('./settings-dingtalk');
+  const wb = getWorkbenchConfig(cfg);
+  const pub = settingsDt.getPublicDingtalkSettings(cfg);
+  pub.settingsEnabled = wb.settingsEnabled;
+  return pub;
+}
+
+function saveDingtalkSettingsFromWeb(cfg, body) {
+  // eslint-disable-next-line global-require
+  const settingsDt = require('./settings-dingtalk');
+  const wb = getWorkbenchConfig(cfg);
+  const saved = settingsDt.saveDingtalkSettings(cfg.dataDir, body || {}, {
+    settingsEnabled: wb.settingsEnabled,
+  });
+  if (!saved.ok) return saved;
+  return { ...getDingtalkSettings(cfg), ok: true, saved: true };
+}
+
+/**
+ * @param {object} cfg
+ * @param {{ force?: boolean }} [opts] force=true 忽略 enabled（测试连接）
+ */
+async function sendDingtalkDigestFromWeb(cfg, opts = {}) {
+  // eslint-disable-next-line global-require
+  const morning = require('./morning-digest');
+  const wb = getWorkbenchConfig(cfg);
+  if (wb.settingsEnabled === false) {
+    return { ok: false, code: 'settings_disabled', message: 'workbench.settingsEnabled=false' };
+  }
+  return morning.sendMorningDigest(cfg, {
+    force: opts.force === true,
+  });
+}
+
 function saveLlmSettingsFromWeb(cfg, body) {
   // eslint-disable-next-line global-require
   const settingsLlm = require('./settings-llm');
@@ -1819,6 +1858,9 @@ module.exports = {
   getLlmSettings,
   saveLlmSettingsFromWeb,
   testLlmSettingsFromWeb,
+  getDingtalkSettings,
+  saveDingtalkSettingsFromWeb,
+  sendDingtalkDigestFromWeb,
   getBusinessBriefPromptSettings,
   saveBusinessBriefPromptSettings,
   resetBusinessBriefPromptSettings,

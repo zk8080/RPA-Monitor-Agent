@@ -117,5 +117,6 @@ module.exports = {
 
 
   // dataDir: 'D:/rpa-monitor-data',
+  // 紧急旁路预留（即时）；日常晨报请用工作台「设置 → 钉钉晨报」data/settings.dingtalk.json
   alertWebhook: '',
 };

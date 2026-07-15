@@ -688,7 +688,9 @@
     }
     if (parts[0] === 'apps') return { name: 'apps' };
     if (parts[0] === 'settings') {
-      const tab = parts[1] === 'prompts' || parts[1] === 'brief' ? 'prompts' : 'llm';
+      let tab = 'llm';
+      if (parts[1] === 'prompts' || parts[1] === 'brief') tab = 'prompts';
+      else if (parts[1] === 'dingtalk' || parts[1] === 'notify') tab = 'dingtalk';
       return { name: 'settings', tab };
     }
     return { name: 'home' };
@@ -696,11 +698,13 @@
 
   async function renderSettings(tabHint) {
     const route = parseRoute();
-    const tab = tabHint === 'prompts' || tabHint === 'llm'
-      ? tabHint
-      : route.name === 'settings' && route.tab
-        ? route.tab
-        : 'llm';
+    const allowedTabs = new Set(['llm', 'prompts', 'dingtalk']);
+    const tab =
+      tabHint && allowedTabs.has(tabHint)
+        ? tabHint
+        : route.name === 'settings' && route.tab && allowedTabs.has(route.tab)
+          ? route.tab
+          : 'llm';
 
     setNav('settings');
     setHeader('设置');
@@ -708,9 +712,10 @@
     activeAgentPrompt = '';
     content.innerHTML = loadingHtml('加载设置…');
 
-    const [data, briefCfg] = await Promise.all([
+    const [data, briefCfg, dtCfg] = await Promise.all([
       api('/api/settings/llm'),
       api('/api/settings/business-brief'),
+      api('/api/settings/dingtalk'),
     ]);
     if (!data || data.ok === false) {
       content.innerHTML = `<div class="err">加载失败：${esc(data && (data.message || data.code))}</div>`;
@@ -720,6 +725,8 @@
     const locked = data.envLocked || {};
     const ro = data.settingsEnabled === false;
     const briefRo = ro || (briefCfg && briefCfg.settingsEnabled === false);
+    const dt = dtCfg && dtCfg.ok !== false ? dtCfg : { ok: false };
+    const dtRo = ro || dt.settingsEnabled === false;
     const lockHint = (field) =>
       locked[field]
         ? `<span class="field-lock">环境变量锁定</span>`
@@ -736,6 +743,8 @@
           data-settings-tab="llm" aria-selected="${tab === 'llm'}">LLM 连接</button>
         <button type="button" role="tab" class="tab ${tab === 'prompts' ? 'active' : ''}"
           data-settings-tab="prompts" aria-selected="${tab === 'prompts'}">业务解读提示词</button>
+        <button type="button" role="tab" class="tab ${tab === 'dingtalk' ? 'active' : ''}"
+          data-settings-tab="dingtalk" aria-selected="${tab === 'dingtalk'}">钉钉晨报</button>
       </div>
 
       <div id="settings-pane-llm" class="settings-pane ${tab === 'llm' ? 'is-active' : ''}" role="tabpanel" ${
@@ -830,15 +839,108 @@
             </div>
           </form>
         </div>
+      </div>
+
+      <div id="settings-pane-dingtalk" class="settings-pane ${tab === 'dingtalk' ? 'is-active' : ''}" role="tabpanel" ${
+        tab === 'dingtalk' ? '' : 'hidden'
+      }>
+        <div class="panel settings-panel">
+          <p class="meta mb">
+            ${dt.enabled ? '已启用' : '未启用'}
+            · ${dt.webhookConfigured ? '已配置 Webhook' : '未配置 Webhook'}
+            ${dt.updatedAt ? `· ${esc(formatTime(dt.updatedAt))}` : ''}
+          </p>
+          <p class="hint mb">
+            每天在 <strong>日报 cron 之后</strong>固定推送一条晨间摘要（默认约 9:05）。
+            <strong>无异常也会发</strong>，便于区分「服务挂了」与「真无失败」。
+            ${dt.scheduleHint ? `<br/>${esc(dt.scheduleHint)}` : ''}
+          </p>
+          ${
+            dtRo
+              ? `<div class="tip mb">settingsEnabled=false，当前只读。</div>`
+              : ''
+          }
+          ${
+            dt.lastSendAt
+              ? `<p class="meta mb">上次推送：${esc(formatTime(dt.lastSendAt))} · ${
+                  dt.lastSendOk ? '<span class="badge ok">成功</span>' : `<span class="badge danger">失败</span> ${esc(dt.lastSendError || '')}`
+                }</p>`
+              : ''
+          }
+          <form id="dingtalk-form" class="settings-form" autocomplete="off">
+            <label class="field field-check">
+              <input name="enabled" type="checkbox" ${dt.enabled ? 'checked' : ''} ${dtRo ? 'disabled' : ''} />
+              <span>启用每日钉钉晨报</span>
+            </label>
+            <label class="field">
+              <span class="field-label">Webhook URL</span>
+              <input name="webhookUrl" type="url" class="field-input" value=""
+                placeholder="${esc(
+                  dt.webhookMasked
+                    ? `已保存 ${dt.webhookMasked} · 留空不修改`
+                    : 'https://oapi.dingtalk.com/robot/send?access_token=…',
+                )}"
+                ${dtRo ? 'readonly' : ''} />
+            </label>
+            <label class="field">
+              <span class="field-label">加签 Secret（可选）</span>
+              <input name="secret" type="password" class="field-input" value=""
+                placeholder="${esc(
+                  dt.secretMasked ? `已保存 ${dt.secretMasked} · 留空不修改` : 'SEC…（机器人安全设置·加签）',
+                )}"
+                ${dtRo ? 'readonly' : ''} />
+            </label>
+            <div class="grid-2">
+              <label class="field">
+                <span class="field-label">时间窗（天，1=滚动 24h）</span>
+                <input name="recentDays" type="number" min="0" max="30" step="1" class="field-input"
+                  value="${esc(dt.recentDays != null ? dt.recentDays : 1)}" ${dtRo ? 'readonly' : ''} />
+              </label>
+              <label class="field">
+                <span class="field-label">最多列出条数</span>
+                <input name="topN" type="number" min="1" max="30" step="1" class="field-input"
+                  value="${esc(dt.topN != null ? dt.topN : 8)}" ${dtRo ? 'readonly' : ''} />
+              </label>
+            </div>
+            <label class="field">
+              <span class="field-label">@ 手机号（钉钉绑定手机，逗号分隔）</span>
+              <input name="atMobilesText" type="text" class="field-input"
+                value="${esc(dt.atMobilesText || '')}"
+                placeholder="13800138000, 13900139000"
+                ${dtRo ? 'readonly' : ''} />
+            </label>
+            <label class="field field-check">
+              <input name="atAll" type="checkbox" ${dt.atAll ? 'checked' : ''} ${dtRo ? 'disabled' : ''} />
+              <span>@所有人</span>
+            </label>
+            <label class="field field-check">
+              <input name="atAlways" type="checkbox" ${dt.atAlways !== false ? 'checked' : ''} ${dtRo ? 'disabled' : ''} />
+              <span>无异常时也 @（推荐：避免漏看「服务是否还活着」）</span>
+            </label>
+            <p class="hint">机器人安全设置若开了「自定义关键词」，请包含「RPA」或关掉关键词；@ 手机号须是群成员且与钉钉账号绑定一致。</p>
+            <div class="settings-actions">
+              <button type="submit" class="btn primary" id="btn-dt-save" ${dtRo ? 'disabled' : ''}>保存</button>
+              <button type="button" class="btn" id="btn-dt-test" ${dtRo ? 'disabled' : ''}>发送测试</button>
+              <button type="button" class="btn ghost" id="btn-dt-clear" ${dtRo ? 'disabled' : ''}>清除密钥</button>
+            </div>
+            <p id="dingtalk-test-result" class="meta mt" role="status"></p>
+            <p class="hint mt">「发送测试」会立即推送一条当前晨报（不要求已启用开关）。请先保存 Webhook 与 @ 设置。</p>
+          </form>
+        </div>
       </div>`;
+
+    const settingsTabHash = {
+      llm: '#/settings/llm',
+      prompts: '#/settings/prompts',
+      dingtalk: '#/settings/dingtalk',
+    };
 
     // 切换 Tab：改 hash，避免整页堆叠
     content.querySelectorAll('[data-settings-tab]').forEach((btn) => {
       btn.addEventListener('click', () => {
         const next = btn.getAttribute('data-settings-tab') || 'llm';
-        const hash = next === 'prompts' ? '#/settings/prompts' : '#/settings/llm';
+        const hash = settingsTabHash[next] || '#/settings/llm';
         if (location.hash === hash) {
-          // 同 hash 时手动切换显示
           switchSettingsTab(next);
         } else {
           location.hash = hash;
@@ -852,18 +954,14 @@
         b.classList.toggle('active', on);
         b.setAttribute('aria-selected', on ? 'true' : 'false');
       });
-      const llmPane = $('#settings-pane-llm');
-      const promptPane = $('#settings-pane-prompts');
-      if (llmPane) {
-        llmPane.classList.toggle('is-active', next === 'llm');
-        if (next === 'llm') llmPane.removeAttribute('hidden');
-        else llmPane.setAttribute('hidden', '');
-      }
-      if (promptPane) {
-        promptPane.classList.toggle('is-active', next === 'prompts');
-        if (next === 'prompts') promptPane.removeAttribute('hidden');
-        else promptPane.setAttribute('hidden', '');
-      }
+      ['llm', 'prompts', 'dingtalk'].forEach((id) => {
+        const pane = $(`#settings-pane-${id}`);
+        if (!pane) return;
+        const on = id === next;
+        pane.classList.toggle('is-active', on);
+        if (on) pane.removeAttribute('hidden');
+        else pane.setAttribute('hidden', '');
+      });
       setHeader('设置');
     }
 
@@ -1008,6 +1106,119 @@
           } else toast(r.message || '恢复失败');
         } catch (err) {
           toast(err.message || '恢复失败');
+        }
+      });
+    }
+
+    // 钉钉晨报
+    const dtForm = $('#dingtalk-form');
+    const dtResult = $('#dingtalk-test-result');
+    function dingtalkBody({ clearSecrets = false } = {}) {
+      if (!dtForm) return {};
+      const fd = new FormData(dtForm);
+      const body = {
+        enabled: dtForm.querySelector('[name=enabled]')?.checked === true,
+        recentDays: parseInt(String(fd.get('recentDays') || '1'), 10),
+        topN: parseInt(String(fd.get('topN') || '8'), 10),
+        atMobilesText: String(fd.get('atMobilesText') || '').trim(),
+        atAll: dtForm.querySelector('[name=atAll]')?.checked === true,
+        atAlways: dtForm.querySelector('[name=atAlways]')?.checked !== false,
+      };
+      if (clearSecrets) {
+        body.clearWebhook = true;
+        body.clearSecret = true;
+        body.webhookUrl = '__CLEAR__';
+        body.secret = '__CLEAR__';
+      } else {
+        const w = String(fd.get('webhookUrl') || '').trim();
+        const s = String(fd.get('secret') || '');
+        if (w) body.webhookUrl = w;
+        if (s.trim()) body.secret = s.trim();
+      }
+      return body;
+    }
+    if (dtForm) {
+      dtForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        if (dtRo) return;
+        const btn = $('#btn-dt-save');
+        if (btn) {
+          btn.disabled = true;
+          btn.textContent = '保存中…';
+        }
+        try {
+          const r = await api('/api/settings/dingtalk', {
+            method: 'PUT',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(dingtalkBody()),
+          });
+          if (r && r.ok) {
+            toast('钉钉设置已保存');
+            await renderSettings('dingtalk');
+          } else {
+            toast(r.message || r.code || '保存失败');
+          }
+        } catch (err) {
+          toast(err.message || '保存失败');
+        } finally {
+          if (btn) {
+            btn.disabled = false;
+            btn.textContent = '保存';
+          }
+        }
+      });
+    }
+    const dtTest = $('#btn-dt-test');
+    if (dtTest) {
+      dtTest.addEventListener('click', async () => {
+        dtTest.disabled = true;
+        dtTest.textContent = '发送中…';
+        if (dtResult) dtResult.textContent = '';
+        try {
+          // 若表单填了新 webhook，先保存再测
+          if (!dtRo) {
+            await api('/api/settings/dingtalk', {
+              method: 'PUT',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify(dingtalkBody()),
+            });
+          }
+          const r = await api('/api/settings/dingtalk/test', { method: 'POST' });
+          if (r && r.ok) {
+            const msg = `已发送${r.stats && r.stats.healthy ? '（无异常）' : `（失败 ${r.stats?.total ?? '?'}）`}`;
+            if (dtResult) dtResult.textContent = msg;
+            toast(msg);
+            await renderSettings('dingtalk');
+          } else {
+            const msg = r.message || r.code || '发送失败';
+            if (dtResult) dtResult.textContent = msg;
+            toast(msg);
+          }
+        } catch (err) {
+          if (dtResult) dtResult.textContent = err.message || '发送失败';
+          toast(err.message || '发送失败');
+        } finally {
+          dtTest.disabled = false;
+          dtTest.textContent = '发送测试';
+        }
+      });
+    }
+    const dtClear = $('#btn-dt-clear');
+    if (dtClear) {
+      dtClear.addEventListener('click', async () => {
+        if (!confirm('清除已保存的 Webhook 与 Secret？')) return;
+        try {
+          const r = await api('/api/settings/dingtalk', {
+            method: 'PUT',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(dingtalkBody({ clearSecrets: true })),
+          });
+          if (r && r.ok) {
+            toast('已清除 Webhook / Secret');
+            await renderSettings('dingtalk');
+          } else toast(r.message || '清除失败');
+        } catch (err) {
+          toast(err.message || '清除失败');
         }
       });
     }

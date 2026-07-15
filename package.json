@@ -26,6 +26,7 @@
     "test:p1": "node monitor/test_p1_s20_s10a.js",
     "test:merge": "node monitor/test_merge.js",
     "test:settings-llm": "node monitor/test_settings_llm.js",
+    "test:dingtalk": "node monitor/test_dingtalk.js",
     "test:business-brief": "node monitor/test_business_brief.js"
   }
 }
