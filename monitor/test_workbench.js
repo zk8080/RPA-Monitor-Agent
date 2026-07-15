@@ -132,6 +132,8 @@ assert.strictEqual(hit.payload.result.summary, 'hi');
 // --- overview with temp dataDir (no local apps required) ---
 const dataDir = path.join(tmp, 'data');
 fs.mkdirSync(path.join(dataDir, 'queue'), { recursive: true });
+// 失败时间用「现在」：默认优先窗口 = 滚动 24h
+const recentFailAt = new Date().toISOString();
 fs.writeFileSync(
   path.join(dataDir, 'queue', 'fp1.json'),
   JSON.stringify({
@@ -139,8 +141,23 @@ fs.writeFileSync(
     robotUuid: 'r-demo',
     robotName: 'Demo',
     diagnosed: false,
-    lastSeen: '2026-07-12T12:00:00.000Z',
+    lastFailureAt: recentFailAt,
+    lastSeen: recentFailAt,
     occurrenceCount: 1,
+  }),
+  'utf8',
+);
+// 超过 24h 的失败：仍进 queue/应用列表，但不进优先处理
+fs.writeFileSync(
+  path.join(dataDir, 'queue', 'fp-old.json'),
+  JSON.stringify({
+    fingerprint: 'fp-old',
+    robotUuid: 'r-old',
+    robotName: 'Old',
+    diagnosed: false,
+    lastFailureAt: '2020-01-01T00:00:00.000Z',
+    lastSeen: '2020-01-01T00:00:00.000Z',
+    occurrenceCount: 3,
   }),
   'utf8',
 );
@@ -153,14 +170,19 @@ const cfg = {
 };
 fs.mkdirSync(cfg.shadowbotUsersRoot, { recursive: true });
 
-const overview = buildOverview(cfg, { startedAt: Date.now() - 5000, lastPollAt: '2026-07-12T12:00:00.000Z' });
+const overview = buildOverview(cfg, { startedAt: Date.now() - 5000, lastPollAt: recentFailAt });
 assert.strictEqual(overview.ok, true);
-assert.ok(overview.queue.depth >= 1);
+assert.ok(overview.queue.depth >= 2);
+assert.strictEqual(overview.queue.priorityRecentDays, 1, '默认优先窗口 1 天=24h');
 assert.ok(overview.problemApps.some((p) => p.robotUuid === 'r-demo'));
 assert.ok(Array.isArray(overview.priorityQueue), 'overview 应含 priorityQueue');
 assert.ok(
   overview.priorityQueue.some((p) => p.fingerprint === 'fp1' && p.reasons.includes('undiagnosed')),
-  '未诊断条目应进今日优先',
+  '24h 内未诊断条目应进优先处理',
+);
+assert.ok(
+  !overview.priorityQueue.some((p) => p.fingerprint === 'fp-old'),
+  '超过 24h 的失败不进优先处理',
 );
 
 const apps = listAppsWithStats(cfg);

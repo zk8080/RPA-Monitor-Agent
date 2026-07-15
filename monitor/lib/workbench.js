@@ -40,13 +40,13 @@ function getWorkbenchConfig(cfg = {}) {
     settingsEnabled: w.settingsEnabled !== false,
     // S27a：交接包默认是否附带诊断（仍可被查询参数覆盖）
     handoffIncludeDiagnose: w.handoffIncludeDiagnose === true,
-    // S27d：优先队列只看 open，且失败时间在 recentDays 内（0=不限）
+    // S27d：优先队列只看 open，且失败时间在 recentDays 内（1=滚动 24h；0=不限）
     priorityRecentDays:
       w.priorityRecentDays != null
         ? Number(w.priorityRecentDays)
         : process.env.WORKBENCH_PRIORITY_RECENT_DAYS != null
           ? Number(process.env.WORKBENCH_PRIORITY_RECENT_DAYS)
-          : 14,
+          : 1,
     defaultSnoozeDays:
       w.defaultSnoozeDays != null
         ? Number(w.defaultSnoozeDays)
@@ -215,7 +215,7 @@ function crossFingerprintSet(groups) {
 /**
  * 今日优先队列：按失败指纹排序，告诉人「先处理谁」
  * 仅 workStatus 有效 open（snoozed 过期算 open；ignored 不进）
- * 可选 recentDays：lastFailureAt 在窗口内
+ * 可选 recentDays：lastFailureAt 在滚动窗口内（默认 1=24h；0=不限）
  * 排序：未诊断 > 复发 > 跨应用 > 可预览修 > 高频 occurrence；同分按失败时间新→旧
  *
  * @param {object[]} queueItems
@@ -238,7 +238,7 @@ function buildPriorityQueue(queueItems, opts = {}) {
   const recentDays =
     opts.recentDays != null && Number(opts.recentDays) >= 0
       ? Number(opts.recentDays)
-      : 14;
+      : 1;
   const now = opts.now || new Date();
   const nameResolver =
     typeof opts.nameResolver === 'function' ? opts.nameResolver : () => ({});
@@ -315,6 +315,12 @@ function buildPriorityQueue(queueItems, opts = {}) {
       robotUuid: it.robotUuid || null,
       robotName: names.robotName || it.robotName || it.robotUuid || '',
       taskName: names.taskName || it.taskName || '',
+      // 影刀客户端/机器侧名称（与应用 robotName 不同）
+      robotClientName:
+        names.robotClientName ||
+        it.robotClientName ||
+        '',
+      robotClientUuid: it.robotClientUuid || '',
       flowName: it.flowName || '',
       errorType: it.errorType || '',
       diagnosed: !!it.diagnosed,
@@ -416,7 +422,16 @@ function buildOverview(cfg, state = {}) {
       const merged = mergeTaskNames(st, te, it);
       const appName =
         (local && local.name) || it.robotName || (te && te.robotName) || rid || '';
-      return { robotName: appName, taskName: merged.taskName || it.taskName || '' };
+      const clientName =
+        it.robotClientName ||
+        (st && st.robotClientName) ||
+        (te && te.robotClientName) ||
+        '';
+      return {
+        robotName: appName,
+        taskName: merged.taskName || it.taskName || '',
+        robotClientName: clientName,
+      };
     },
   });
 
@@ -470,7 +485,7 @@ function buildOverview(cfg, state = {}) {
       },
       priorityRecentDays: wbCfg.priorityRecentDays,
     },
-    /** 今日优先处理的失败指纹（最多 10；仅 open + 近 N 天） */
+    /** 优先处理的失败指纹（最多 10；仅 open + 近 N 天，默认 1=24h） */
     priorityQueue,
     problemApps,
     crossAppGroups: crossAppGroups.map((g) => ({
@@ -583,7 +598,7 @@ function buildAppListRow(base, st, taskEntry) {
     /** 影刀 job.taskName：调度任务名（列表主展示；可来自成功 job） */
     taskName: taskName || '',
     taskNames,
-    /** 影刀 job.robotClientName：运行客户端 / 机器人 */
+    /** 影刀 job.robotClientName：运行端机器人（非应用名） */
     robotClientName: robotClientName || '',
     robotClientUuid: robotClientUuid || '',
     description: (base && base.description) || '',
@@ -802,6 +817,9 @@ function enrichFailureItem(it, cfg) {
     lastDiagnosis: it.lastDiagnosis || null,
     robotUuid: it.robotUuid || null,
     robotName: it.robotName || null,
+    taskName: it.taskName || null,
+    robotClientName: it.robotClientName || null,
+    robotClientUuid: it.robotClientUuid || null,
     fixClass: triage.fixClass,
     fixability: triage.fixability,
     canPreviewFix: canPreviewFix(triage),
@@ -887,6 +905,9 @@ function getFindingDetail(fingerprint, cfg) {
     // 附加字段：失败详情「复制路径 / Agent 提示」；旧客户端可忽略
     xbotDir,
     appName: appName || null,
+    robotClientName: item.robotClientName || null,
+    robotClientUuid: item.robotClientUuid || null,
+    taskName: item.taskName || null,
     kb: kbEntry
       ? {
           id: kbEntry.id,

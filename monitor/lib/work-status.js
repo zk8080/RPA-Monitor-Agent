@@ -2,7 +2,7 @@
  * Queue 人工处置态（workStatus）
  *
  * 状态：open | snoozed | ignored
- * 仅影响「今日优先」等待办面；不删 queue、默认不改全量统计。
+ * 仅影响「优先处理」待办面；不删 queue、默认不改全量统计。
  *
  * 新失败 = 同 fingerprint 出现新的 jobUuid。
  * - snoozed + 新 job → 回 open
@@ -91,7 +91,7 @@ function resolveEffectiveWorkStatus(item = {}, now = new Date()) {
 }
 
 /**
- * 是否应进入「今日优先」候选（仅 open；可选近 N 天有失败）
+ * 是否应进入「优先处理」候选（仅 open；可选滚动近 N 天有失败，1=24h）
  * @param {object} item
  * @param {{ now?: Date|string, recentDays?: number }} [opts]
  */
@@ -108,6 +108,7 @@ function isPriorityEligible(item, opts = {}) {
     if (Number.isNaN(t)) return false;
     const n = now instanceof Date ? now.getTime() : Date.parse(String(now));
     const nowMs = Number.isNaN(n) ? Date.now() : n;
+    // recentDays=1 → 滚动 24h（非自然日 0 点）
     const windowMs = recentDays * 24 * 60 * 60 * 1000;
     if (nowMs - t > windowMs) return false;
   }

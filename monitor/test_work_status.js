@@ -113,27 +113,28 @@ function testUpsertAndManual() {
 
   // priority：ignored 不进
   assert.strictEqual(
-    workStatus.isPriorityEligible(still, { recentDays: 14 }),
+    workStatus.isPriorityEligible(still, { recentDays: 1 }),
     false,
   );
 
   memory.setQueueWorkStatus(dir, fp, 'open');
   const openItem = memory.loadQueueItem(dir, fp);
+  // 默认窗口 = 滚动 24h
   assert.strictEqual(
     workStatus.isPriorityEligible(openItem, {
       now: new Date('2026-07-14T15:00:00.000Z'),
-      recentDays: 14,
+      recentDays: 1,
     }),
     true,
   );
 
-  // 过旧失败不进优先
-  openItem.lastFailureAt = '2020-01-01T00:00:00.000Z';
+  // 超过 24h 不进优先
+  openItem.lastFailureAt = '2026-07-13T14:00:00.000Z'; // 25h 前
   openItem.lastSeen = openItem.lastFailureAt;
   assert.strictEqual(
     workStatus.isPriorityEligible(openItem, {
       now: new Date('2026-07-14T15:00:00.000Z'),
-      recentDays: 14,
+      recentDays: 1,
     }),
     false,
   );
@@ -144,7 +145,7 @@ function testUpsertAndManual() {
 
 function testWorkbenchApi() {
   const dir = tmpDir();
-  const cfg = { dataDir: dir, workbench: { enabled: true, priorityRecentDays: 14 } };
+  const cfg = { dataDir: dir, workbench: { enabled: true, priorityRecentDays: 1 } };
   const fp = 'fp-ws-api';
   memory.upsertQueueItem(
     dir,

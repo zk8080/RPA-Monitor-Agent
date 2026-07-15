@@ -2207,24 +2207,38 @@
       return `<div class="list">${filtered
         .map((item, idx) => {
           const href = `#/findings/${encodeURIComponent(item.fingerprint)}`;
-          const appName = String(item.robotName || item.robotUuid || '').trim();
+          // 影刀术语：应用 = robotName；机器人 = robotClientName（运行端）
+          const appName = String(item.robotName || '').trim();
+          const appUuid = String(item.robotUuid || '').trim();
+          const appLabel = appName || appUuid || '';
+          const robotClient = String(item.robotClientName || '').trim();
           const taskName = String(item.taskName || '').trim();
-          const appLabel =
-            taskName && appName && taskName !== appName
-              ? `${taskName}（${appName}）`
-              : taskName || appName || '未知应用';
           const flow =
-            item.flowName && !/^(unknown-flow|no-flow)$/i.test(String(item.flowName).trim())
-              ? item.flowName
+            item.flowName && !/^(unknown-flow|no-flow|调度层)$/i.test(String(item.flowName).trim())
+              ? String(item.flowName).trim()
               : '';
-          const titleBits = [flow, item.errorType].filter(Boolean);
+          const errType = String(item.errorType || '').trim();
+
+          // 标题 = 流程 · 错误 · 应用名（便于识别是哪个应用的问题）
+          const titleParts = [];
+          if (flow) titleParts.push(flow);
+          if (errType) titleParts.push(errType);
+          if (appLabel && !titleParts.includes(appLabel)) titleParts.push(appLabel);
           const title =
-            titleBits.join(' · ') ||
+            titleParts.join(' · ') ||
             String(item.fingerprint || '').slice(0, 48) ||
             '失败';
+
           const time = item.lastSeen ? relTime(item.lastSeen) : '';
           const occ = item.occurrenceCount > 1 ? `${item.occurrenceCount} 次` : '';
-          const sub = [appLabel, time, occ].filter(Boolean).join(' · ');
+          // 副行：机器人（客户端）/ 任务 / 时间
+          const subBits = [];
+          if (robotClient) subBits.push(`机器人 ${robotClient}`);
+          if (taskName && taskName !== appLabel) subBits.push(taskName);
+          if (time) subBits.push(time);
+          if (occ) subBits.push(occ);
+          const sub = subBits.join(' · ');
+
           const badges =
             bucketBadgeHtml(item) +
             (item.reasonLabels || [])
@@ -2243,8 +2257,8 @@
               .join('');
           return `<a class="list-item" href="${href}">
             <div class="item-main">
-              <div class="item-title"><span class="priority-rank">${idx + 1}</span>${esc(title)}</div>
-              ${sub ? `<div class="item-sub">${esc(sub)}</div>` : ''}
+              <div class="item-title item-title-priority"><span class="priority-rank">${idx + 1}</span>${esc(title)}</div>
+              ${sub ? `<div class="item-sub item-sub-priority">${esc(sub)}</div>` : ''}
             </div>
             <div class="item-side">
               <div class="badges">${badges}</div>
@@ -2286,11 +2300,17 @@
         : '当前无失败指纹';
 
     const wsQ = q.workStatus || {};
-    const recentDays = q.priorityRecentDays != null ? q.priorityRecentDays : 14;
+    const recentDays = q.priorityRecentDays != null ? q.priorityRecentDays : 1;
+    const windowHint =
+      recentDays === 0
+        ? '不限时间'
+        : recentDays === 1
+          ? '近 24 小时内'
+          : `近 ${recentDays} 天内`;
     const priorityPanel = `
       <div class="panel mb panel-priority">
         <h2>优先处理 <span class="meta" id="priority-count">${countInPriority(priorityFilter)}</span><span class="meta faint"> / ${priority.length}</span></h2>
-        <p class="hint mb-sm">仅<strong>待处理(open)</strong>且失败约近 ${esc(recentDays)} 天内的指纹；按未诊断 → 复发 → 跨应用 → 可预览修 → 高频排序，最多 10 条。稍后/不再提醒的不进本列表。待处理 ${esc(wsQ.open ?? '—')} · 稍后 ${esc(wsQ.snoozed ?? 0)} · 不提醒 ${esc(wsQ.ignored ?? 0)}${wsQ.ignoredStillFailing ? `（忽略后仍失败 ${wsQ.ignoredStillFailing}）` : ''}。</p>
+        <p class="hint mb-sm">仅<strong>待处理(open)</strong>且失败${esc(windowHint)}的指纹；按未诊断 → 复发 → 跨应用 → 可预览修 → 高频排序，最多 10 条。稍后/不再提醒的不进本列表。待处理 ${esc(wsQ.open ?? '—')} · 稍后 ${esc(wsQ.snoozed ?? 0)} · 不提醒 ${esc(wsQ.ignored ?? 0)}${wsQ.ignoredStillFailing ? `（忽略后仍失败 ${wsQ.ignoredStillFailing}）` : ''}。</p>
         <div class="chip-row bucket-filters mb-sm" role="toolbar" aria-label="今日优先分流筛选">
           ${bucketChipDefs
             .map(
@@ -2761,7 +2781,7 @@
             }
             ${
               detail.robotClientName
-                ? `<div class="k">客户端</div><div class="v">${esc(detail.robotClientName)}</div>`
+                ? `<div class="k">机器人</div><div class="v">${esc(detail.robotClientName)}</div>`
                 : ''
             }
             <div class="k">UUID</div><div class="v mono">${esc(detail.robotUuid)}</div>
@@ -2913,10 +2933,17 @@
     setActiveHandoff({ path: xbotDir, agentPrompt });
 
     setHeader(
-      f.robotName || fingerprint,
-      `${f.errorType || ''} · ${f.diagnosed ? '已诊断' : '未诊断'}${
-        g && g.title ? ` · ${g.title}` : ''
-      } · ${workLabel}`,
+      f.robotName || appName || fingerprint,
+      [
+        f.errorType || '',
+        // 影刀语境：机器人 = 运行客户端，不是应用名
+        f.robotClientName ? `机器人 ${f.robotClientName}` : '',
+        f.diagnosed ? '已诊断' : '未诊断',
+        g && g.title ? g.title : '',
+        workLabel,
+      ]
+        .filter(Boolean)
+        .join(' · '),
     );
 
     const workBadgeCls =
@@ -2977,9 +3004,33 @@
         </div>
         <p class="summary-line" style="margin-bottom:8px">${esc((f.rawRemark || '').slice(0, 400) || '无备注')}</p>
         <div class="kv">
-          <div class="k">指纹</div><div class="v mono">${esc(fingerprint)}</div>
-          <div class="k">流程</div><div class="v">${esc(f.flowName || '—')} L${esc(f.lineNumber || '?')}</div>
+          <div class="k">应用</div><div class="v">${esc(f.robotName || appName || '—')}${
+            robotUuid
+              ? ` <span class="mono faint" style="font-size:12px">(${esc(robotUuid)})</span>`
+              : ''
+          }</div>
+          <div class="k">机器人</div><div class="v">${esc(
+            f.robotClientName || data.robotClientName || '—',
+          )}${
+            f.robotClientUuid || data.robotClientUuid
+              ? ` <span class="mono faint" style="font-size:12px">(${esc(
+                  f.robotClientUuid || data.robotClientUuid,
+                )})</span>`
+              : ''
+          }</div>
+          <div class="k">任务</div><div class="v">${esc(f.taskName || data.taskName || '—')}</div>
           <div class="k">错误</div><div class="v">${esc(f.errorType || '—')}</div>
+          ${
+            f.elementName
+              ? `<div class="k">原因</div><div class="v">${esc(f.elementName)}</div>`
+              : ''
+          }
+          <div class="k">流程</div><div class="v">${
+            f.flowName
+              ? `${esc(f.flowName)} L${esc(f.lineNumber || '?')}`
+              : '<span class="hint">调度层（无流程/行号）</span>'
+          }</div>
+          <div class="k">指纹</div><div class="v mono">${esc(fingerprint)}</div>
           <div class="k">处置</div><div class="v">${esc(workLabel)}${
             work.snoozedUntil ? ` · 至 ${esc(relTime(work.snoozedUntil))}` : ''
           }</div>
@@ -2991,33 +3042,50 @@
               : ''
           }</div>
           <div class="k">分诊</div><div class="v">${esc(triage.fixClass || '—')} / ${esc(triage.fixability || '—')}</div>
-          <div class="k">最近</div><div class="v">${esc(relTime(f.lastSeen))}</div>
+          <div class="k">最近</div><div class="v">${esc(relTime(f.lastSeen || f.lastFailureAt))}</div>
         </div>
-        <div class="actions mt">
-          ${
-            f.diagnosed
-              ? `<button type="button" class="btn" data-action="diagnose" data-fp="${esc(fingerprint)}">重新诊断</button>`
-              : `<button type="button" class="btn primary" data-action="diagnose" data-fp="${esc(fingerprint)}">诊断</button>`
-          }
-          ${
-            canPreview
-              ? `<button type="button" class="btn ghost" data-action="fix-dry-run" data-fp="${esc(fingerprint)}">预览修复</button>`
-              : ''
-          }
-        </div>
-        <div class="actions mt work-status-actions">
-          <span class="hint" style="margin-right:8px">处置（只影响优先列表）</span>
-          ${
-            workStatus !== 'open'
-              ? `<button type="button" class="btn sm" data-work="open" data-fp="${esc(fingerprint)}">恢复待处理</button>`
-              : ''
-          }
-          <button type="button" class="btn sm ghost" data-work="snoozed" data-fp="${esc(
-            fingerprint,
-          )}" title="默认 ${snoozeDays} 天；期间新失败会拉回待处理">稍后 ${esc(snoozeDays)} 天</button>
-          <button type="button" class="btn sm ghost" data-work="ignored" data-fp="${esc(
-            fingerprint,
-          )}" title="不再进优先列表；新失败默认不拉回（修复复发除外）">不再提醒</button>
+        <div class="finding-toolbar" role="toolbar" aria-label="问题操作">
+          <div class="finding-toolbar-primary">
+            ${
+              f.diagnosed
+                ? `<button type="button" class="btn" data-action="diagnose" data-fp="${esc(fingerprint)}">重新诊断</button>`
+                : `<button type="button" class="btn primary" data-action="diagnose" data-fp="${esc(fingerprint)}">诊断</button>`
+            }
+            ${
+              canPreview
+                ? `<button type="button" class="btn" data-action="fix-dry-run" data-fp="${esc(fingerprint)}">预览修复</button>`
+                : ''
+            }
+          </div>
+          <div class="finding-toolbar-status">
+            <span class="finding-toolbar-label" title="只影响优先处理列表，不删 queue、不改代码">处置</span>
+            <div class="seg" role="group" aria-label="优先列表处置">
+              <button
+                type="button"
+                class="seg-btn${workStatus === 'open' ? ' is-active' : ''}"
+                data-work="open"
+                data-fp="${esc(fingerprint)}"
+                aria-pressed="${workStatus === 'open' ? 'true' : 'false'}"
+                title="进入优先处理"
+              >待处理</button>
+              <button
+                type="button"
+                class="seg-btn${workStatus === 'snoozed' ? ' is-active' : ''}"
+                data-work="snoozed"
+                data-fp="${esc(fingerprint)}"
+                aria-pressed="${workStatus === 'snoozed' ? 'true' : 'false'}"
+                title="默认 ${snoozeDays} 天；期间新失败会拉回待处理"
+              >稍后 ${esc(snoozeDays)} 天</button>
+              <button
+                type="button"
+                class="seg-btn${workStatus === 'ignored' ? ' is-active' : ''}"
+                data-work="ignored"
+                data-fp="${esc(fingerprint)}"
+                aria-pressed="${workStatus === 'ignored' ? 'true' : 'false'}"
+                title="不再进优先列表；新失败默认不拉回（修复复发除外）"
+              >不再提醒</button>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -3098,7 +3166,15 @@
         const st = btn.getAttribute('data-work');
         const fp = btn.getAttribute('data-fp') || fingerprint;
         if (!st || !fp) return;
-        btn.disabled = true;
+        // 当前态已选中：不再重复提交
+        if (btn.classList.contains('is-active') || btn.getAttribute('aria-pressed') === 'true') {
+          return;
+        }
+        const group = btn.closest('.seg') || content;
+        const siblings = group.querySelectorAll('[data-work]');
+        siblings.forEach((b) => {
+          b.disabled = true;
+        });
         try {
           const r = await api(`/api/findings/${encodeURIComponent(fp)}/work-status`, {
             method: 'POST',
@@ -3119,11 +3195,15 @@
             await renderFinding(fp);
           } else {
             toast(r.message || r.code || '设置失败');
-            btn.disabled = false;
+            siblings.forEach((b) => {
+              b.disabled = false;
+            });
           }
         } catch (e) {
           toast(e.message || '设置失败');
-          btn.disabled = false;
+          siblings.forEach((b) => {
+            b.disabled = false;
+          });
         }
       });
     });

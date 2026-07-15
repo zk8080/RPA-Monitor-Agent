@@ -16,20 +16,36 @@ colors:
   warn: "#b45309"
   danger: "#b91c1c"
 typography:
+  # Fixed rem scale (~1.15). CSS tokens: --text-xs … --text-page
+  caption:
+    fontSize: "11px" # --text-xs: badge / rank / kickers
+  secondary:
+    fontSize: "12px" # --text-sm: meta / mono / item-sub
+  ui:
+    fontSize: "13px" # --text-ui: buttons, tabs
   body:
     fontFamily: "system-ui, Segoe UI, PingFang SC, Microsoft YaHei UI, sans-serif"
-    fontSize: "14px"
+    fontSize: "14px" # --text-body
     fontWeight: 400
     lineHeight: 1.5
+  listTitle:
+    fontSize: "15px" # --text-list: card/list primary row (always ≥ body)
+    fontWeight: 600
+  section:
+    fontSize: "16px" # --text-section: panel h2 / report h2
+    fontWeight: 600
+  subhead:
+    fontSize: "18px" # --text-subhead: brief / content title
+    fontWeight: 600
   title:
     fontFamily: "system-ui, Segoe UI, PingFang SC, Microsoft YaHei UI, sans-serif"
-    fontSize: "28px"
+    fontSize: "28px" # --text-page
     fontWeight: 600
     lineHeight: 1.15
     letterSpacing: "-0.03em"
   mono:
     fontFamily: "ui-monospace, Cascadia Code, SF Mono, Consolas, monospace"
-    fontSize: "12px"
+    fontSize: "12px" # default mono; list mono titles use listTitle size
     fontWeight: 400
     lineHeight: 1.45
 rounded:
@@ -51,7 +67,9 @@ Cool near-white neutrals; slate rail; restrained brand blue (`#2a6de7`) for prim
 
 ## Typography
 
-System UI stack (Segoe UI / San Francisco / PingFang / YaHei) + system mono. No webfont load. Large page titles (28px), quiet uppercase panel labels.
+System UI stack (Segoe UI / San Francisco / PingFang / YaHei) + system mono. No webfont load.
+
+**Hierarchy ladder (must not invert):** caption 11 → secondary 12 → body 14 → **list/card title 15** → **panel section 16** → subhead 18 → page 28. Weight 600 on titles; secondary copy stays 400 + muted color. Mono face on list titles keeps list size (never 12px title under 14px body). Panel `h2` is a real section title (not uppercase caption).
 
 ## Elevation
 

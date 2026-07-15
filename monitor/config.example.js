@@ -102,6 +102,7 @@ module.exports = {
     understandCache: true, // data/cache/understand
     actionsEnabled: true, // S25b：Web 一键 diagnose / fix dry-run（永不 apply）
     settingsEnabled: true, // S26：Web 配置 LLM（data/settings.llm.json）
+    // priorityRecentDays: 1, // 优先处理时间窗：1=滚动 24h（默认）；0=不限；也可设 7/14
     // openCommand: null, // 可选：自定义打开文件夹命令，默认 Windows explorer
     // agents：在 Coding Agent 打开（默认 cursor / vscode / qoder / claude / codex）
     // 对象按 id 覆盖；false 禁用；或传数组全量替换
