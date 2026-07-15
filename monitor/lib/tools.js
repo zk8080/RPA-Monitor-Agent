@@ -82,6 +82,7 @@ const TOOLS = [
       return yingdao.searchLogs(token, input.jobUuid, {
         page: input.page ?? 1,
         size: input.size ?? 100,
+        sort: input.sort,
       });
     },
   },

@@ -23,6 +23,32 @@ function localDateLabel(now = new Date()) {
 }
 
 /**
+ * 本机日历日 yyyy-MM-dd（用于「一天只发一次」）
+ * @param {Date|string|number} [now]
+ */
+function localDateKey(now = new Date()) {
+  const d = now instanceof Date ? now : new Date(now);
+  if (Number.isNaN(d.getTime())) return '';
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+/**
+ * 是否今天已成功发过晨报（本机时区）
+ * @param {string} dataDir
+ * @param {Date} [now]
+ */
+function alreadySentToday(dataDir, now = new Date()) {
+  const file = settingsDingtalk.readSettingsFile(dataDir, { force: true });
+  if (!file.lastSendAt || file.lastSendOk !== true) return false;
+  const lastKey = localDateKey(file.lastSendAt);
+  const todayKey = localDateKey(now);
+  return Boolean(lastKey && todayKey && lastKey === todayKey);
+}
+
+/**
  * @param {object} item
  * @param {number} recentDays
  * @param {Date} now
@@ -158,13 +184,17 @@ function buildMorningDigest(cfg, opts = {}) {
 }
 
 /**
- * 发送晨间摘要（enabled 校验；force 可绕过 enabled 做测试）
+ * 发送晨间摘要
+ * - 默认：须 enabled + webhook；**本机日历日成功后不再重复发**
+ * - force=true：绕过 enabled 与「一日一次」（设置页测试/手动发送）
+ *
  * @param {object} cfg
- * @param {{ force?: boolean, recentDays?: number, topN?: number }} [opts]
+ * @param {{ force?: boolean, recentDays?: number, topN?: number, now?: Date }} [opts]
  */
 async function sendMorningDigest(cfg, opts = {}) {
   const dataDir = cfg.dataDir;
   const runtime = settingsDingtalk.getRuntimeConfig(dataDir);
+  const now = opts.now || new Date();
 
   if (!opts.force && !runtime.enabled) {
     return {
@@ -183,10 +213,21 @@ async function sendMorningDigest(cfg, opts = {}) {
     };
   }
 
+  // 自动路径：每天最多成功推送一次（重启 / --once / cron 重复触发不刷屏）
+  if (!opts.force && alreadySentToday(dataDir, now)) {
+    return {
+      ok: true,
+      skipped: true,
+      code: 'already_sent_today',
+      message: `今日（${localDateKey(now)}）已发送过钉钉晨报，跳过`,
+      dateKey: localDateKey(now),
+    };
+  }
+
   const recentDays =
     opts.recentDays != null ? Number(opts.recentDays) : runtime.recentDays;
   const topN = opts.topN != null ? Number(opts.topN) : runtime.topN;
-  const digest = buildMorningDigest(cfg, { recentDays, topN });
+  const digest = buildMorningDigest(cfg, { recentDays, topN, now });
 
   // @：有手机号或 @所有人时启用；atAlways=false 时仅有失败才 @
   const shouldAt =
@@ -222,4 +263,6 @@ module.exports = {
   buildMorningDigest,
   sendMorningDigest,
   localDateLabel,
+  localDateKey,
+  alreadySentToday,
 };

@@ -331,6 +331,17 @@ function upsertQueueItem(dataDir, item, meta = {}) {
     rawRemark: item.rawRemark || existing?.rawRemark || '',
     diagnosed: existing?.diagnosed === true,
     kbId: existing?.kbId ?? null,
+    // hard=影刀 status 失败；soft=任务成功但日志尾部异常（假成功）
+    failureKind:
+      item.failureKind === 'soft' || item.failureKind === 'hard'
+        ? item.failureKind
+        : existing?.failureKind === 'soft' || existing?.failureKind === 'hard'
+          ? existing.failureKind
+          : 'hard',
+    jobStatus:
+      item.jobStatus != null && String(item.jobStatus).trim() !== ''
+        ? String(item.jobStatus)
+        : existing?.jobStatus || null,
   };
 
   // workStatus：新 job 唤醒规则；无新 job 保留人工处置

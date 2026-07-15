@@ -198,8 +198,8 @@ function getPublicDingtalkSettings(cfg) {
     atMobilesText: (Array.isArray(file.atMobiles) ? file.atMobiles : []).join(', '),
     atAll: file.atAll === true,
     atAlways: file.atAlways !== false,
-    /** 晨报挂在日报 cron 之后发送 */
-    scheduleHint: `随日报 cron 之后发送（reportCron=${reportCron}，默认约 9:05）`,
+    /** 晨报：仅 reportCron；boot/poll 不发；成功后本机日历日去重 */
+    scheduleHint: `仅在日报 cron 后自动发送（reportCron=${reportCron}，默认约 9:05）；启动与定时 poll 不发；每天最多一条（测试发送可强制）`,
     reportCron,
     updatedAt: file.updatedAt || null,
     lastSendAt: file.lastSendAt || null,

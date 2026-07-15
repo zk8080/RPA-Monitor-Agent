@@ -533,8 +533,13 @@
     const bucketLabel = f.bucketLabel || '';
     const bucketCls =
       f.actionable === 'ops' ? 'badge warn' : f.actionable === 'dev' ? 'badge ok' : 'badge';
+    const soft =
+      f.failureKind === 'soft'
+        ? '<span class="badge warn" title="成功抽检：任务状态成功，但日志末尾有错误">抽检命中</span>'
+        : '';
     return `<div class="item-side">
       <div class="badges">
+        ${soft}
         ${f.diagnosed ? '<span class="badge ok">已诊断</span>' : '<span class="badge warn">未诊断</span>'}
         ${bucketLabel ? `<span class="${bucketCls}" title="技术分流">${esc(bucketLabel)}</span>` : ''}
         ${fixLabel ? `<span class="badge">${esc(fixLabel)}</span>` : ''}
@@ -679,6 +684,12 @@
       return { name: 'report', date: decodeURIComponent(parts[1]) };
     }
     if (parts[0] === 'reports') return { name: 'reports' };
+    if (parts[0] === 'poll-runs' && parts[1]) {
+      return { name: 'poll-run', id: decodeURIComponent(parts[1]) };
+    }
+    if (parts[0] === 'poll-runs' || parts[0] === 'pull-logs' || parts[0] === 'polls') {
+      return { name: 'poll-runs' };
+    }
     if (parts[0] === 'apps' && parts[1]) {
       return {
         name: 'app',
@@ -691,14 +702,38 @@
       let tab = 'llm';
       if (parts[1] === 'prompts' || parts[1] === 'brief') tab = 'prompts';
       else if (parts[1] === 'dingtalk' || parts[1] === 'notify') tab = 'dingtalk';
+      else if (
+        parts[1] === 'success-check' ||
+        parts[1] === 'spotcheck' ||
+        parts[1] === 'soft-fail' ||
+        parts[1] === 'soft'
+      ) {
+        tab = 'success-check';
+      }
       return { name: 'settings', tab };
     }
     return { name: 'home' };
   }
 
+  function pollTriggerLabel(t) {
+    const m = {
+      boot: '启动',
+      interval: '定时',
+      manual: '手动',
+      cli: 'CLI',
+      unknown: '未知',
+    };
+    return m[t] || t || '未知';
+  }
+
+  function isErrorLogLevel(level, text) {
+    const s = `${level || ''} ${text || ''}`;
+    return /错误|error|err|exception|fail/i.test(s);
+  }
+
   async function renderSettings(tabHint) {
     const route = parseRoute();
-    const allowedTabs = new Set(['llm', 'prompts', 'dingtalk']);
+    const allowedTabs = new Set(['llm', 'prompts', 'dingtalk', 'success-check']);
     const tab =
       tabHint && allowedTabs.has(tabHint)
         ? tabHint
@@ -712,10 +747,11 @@
     activeAgentPrompt = '';
     content.innerHTML = loadingHtml('加载设置…');
 
-    const [data, briefCfg, dtCfg] = await Promise.all([
+    const [data, briefCfg, dtCfg, scCfg] = await Promise.all([
       api('/api/settings/llm'),
       api('/api/settings/business-brief'),
       api('/api/settings/dingtalk'),
+      api('/api/settings/success-check'),
     ]);
     if (!data || data.ok === false) {
       content.innerHTML = `<div class="err">加载失败：${esc(data && (data.message || data.code))}</div>`;
@@ -727,6 +763,9 @@
     const briefRo = ro || (briefCfg && briefCfg.settingsEnabled === false);
     const dt = dtCfg && dtCfg.ok !== false ? dtCfg : { ok: false };
     const dtRo = ro || dt.settingsEnabled === false;
+    const sc = scCfg && scCfg.ok !== false ? scCfg : { ok: false, appChoices: [] };
+    const scRo = ro || sc.settingsEnabled === false;
+    const scEnv = sc.envLocked || {};
     const lockHint = (field) =>
       locked[field]
         ? `<span class="field-lock">环境变量锁定</span>`
@@ -745,6 +784,8 @@
           data-settings-tab="prompts" aria-selected="${tab === 'prompts'}">业务解读提示词</button>
         <button type="button" role="tab" class="tab ${tab === 'dingtalk' ? 'active' : ''}"
           data-settings-tab="dingtalk" aria-selected="${tab === 'dingtalk'}">钉钉晨报</button>
+        <button type="button" role="tab" class="tab ${tab === 'success-check' ? 'active' : ''}"
+          data-settings-tab="success-check" aria-selected="${tab === 'success-check'}">成功抽检</button>
       </div>
 
       <div id="settings-pane-llm" class="settings-pane ${tab === 'llm' ? 'is-active' : ''}" role="tabpanel" ${
@@ -927,12 +968,120 @@
             <p class="hint mt">「发送测试」会立即推送一条当前晨报（不要求已启用开关）。请先保存 Webhook 与 @ 设置。</p>
           </form>
         </div>
+      </div>
+
+      <div id="settings-pane-success-check" class="settings-pane ${
+        tab === 'success-check' ? 'is-active' : ''
+      }" role="tabpanel" ${tab === 'success-check' ? '' : 'hidden'}>
+        <div class="panel settings-panel">
+          <p class="meta mb">
+            ${sc.enabled !== false ? '已启用' : '已关闭'}
+            · 来源 <code>${esc(sc.source || 'default')}</code>
+            ${sc.updatedAt ? `· ${esc(formatTime(sc.updatedAt))}` : ''}
+            ${
+              sc.allowlistMode
+                ? `· 限定 ${esc((sc.robotUuidAllowlist || []).length)} 个应用`
+                : '· 全部应用（受每轮上限）'
+            }
+          </p>
+          <p class="hint mb">
+            ${esc(sc.productHint || '对状态成功的任务抽查末尾日志，发现被流程吞掉的错误。')}
+          </p>
+          ${
+            scRo
+              ? `<div class="tip mb">settingsEnabled=false，当前只读。</div>`
+              : ''
+          }
+          <form id="success-check-form" class="settings-form" autocomplete="off">
+            <label class="field field-check">
+              <input name="enabled" type="checkbox" ${sc.enabled !== false ? 'checked' : ''} ${
+                scRo || scEnv.enabled ? 'disabled' : ''
+              } />
+              <span>启用成功抽检 ${scEnv.enabled ? '<span class="field-lock">环境变量锁定</span>' : ''}</span>
+            </label>
+            <div class="grid-2">
+              <label class="field">
+                <span class="field-label">每轮最多抽检条数 ${
+                  scEnv.maxPerPoll ? '<span class="field-lock">环境变量</span>' : ''
+                }</span>
+                <input name="maxPerPoll" type="number" min="0" max="200" step="1" class="field-input"
+                  value="${esc(sc.maxPerPoll != null ? sc.maxPerPoll : 25)}"
+                  ${scRo || scEnv.maxPerPoll ? 'readonly' : ''} />
+              </label>
+              <label class="field">
+                <span class="field-label">每应用每轮上限</span>
+                <input name="maxPerAppPerPoll" type="number" min="0" max="50" step="1" class="field-input"
+                  value="${esc(sc.maxPerAppPerPoll != null ? sc.maxPerAppPerPoll : 5)}"
+                  ${scRo ? 'readonly' : ''} />
+              </label>
+            </div>
+            <div class="grid-2">
+              <label class="field">
+                <span class="field-label">查看末尾日志条数</span>
+                <input name="tailSize" type="number" min="1" max="50" step="1" class="field-input"
+                  value="${esc(sc.tailSize != null ? sc.tailSize : 10)}" ${scRo ? 'readonly' : ''} />
+              </label>
+              <label class="field">
+                <span class="field-label">请求间隔 ms（防限流）</span>
+                <input name="minIntervalMs" type="number" min="0" max="5000" step="10" class="field-input"
+                  value="${esc(sc.minIntervalMs != null ? sc.minIntervalMs : 220)}"
+                  ${scRo ? 'readonly' : ''} />
+              </label>
+            </div>
+            <div class="field sc-picker-block">
+              <span class="field-label">只抽检这些应用</span>
+              <p class="hint mb">
+                表格中<strong>不勾选任何行</strong> = 不限定（全部可抽检，仍受每轮上限）。勾选后<strong>仅</strong>抽检已选应用。
+              </p>
+              <div class="sc-table-panel" id="sc-picker" data-readonly="${scRo ? '1' : '0'}">
+                <div class="sc-table-toolbar">
+                  <input
+                    type="search"
+                    class="field-input sc-table-filter"
+                    id="sc-table-filter"
+                    placeholder="筛选表格（应用名 / UUID）…"
+                    autocomplete="off"
+                    ${scRo ? 'disabled' : ''}
+                  />
+                  <div class="sc-table-actions">
+                    <button type="button" class="btn sm ghost" id="btn-sc-check-visible" ${scRo ? 'disabled' : ''}>
+                      勾选当前筛选
+                    </button>
+                    <button type="button" class="btn sm ghost" id="btn-sc-clear" ${scRo ? 'disabled' : ''}>
+                      清空勾选
+                    </button>
+                  </div>
+                </div>
+                <p class="meta sc-mode-hint" id="sc-mode-hint" aria-live="polite"></p>
+                <div class="sc-table-scroll">
+                  <table class="sc-table" id="sc-table">
+                    <thead>
+                      <tr>
+                        <th class="sc-col-check" scope="col">
+                          <span class="sr-only">选择</span>
+                        </th>
+                        <th scope="col">应用</th>
+                        <th scope="col">robotUuid</th>
+                      </tr>
+                    </thead>
+                    <tbody id="sc-table-body"></tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+            <div class="settings-actions">
+              <button type="submit" class="btn primary" ${scRo ? 'disabled' : ''}>保存</button>
+            </div>
+            <p id="success-check-result" class="meta mt" role="status"></p>
+          </form>
+        </div>
       </div>`;
 
     const settingsTabHash = {
       llm: '#/settings/llm',
       prompts: '#/settings/prompts',
       dingtalk: '#/settings/dingtalk',
+      'success-check': '#/settings/success-check',
     };
 
     // 切换 Tab：改 hash，避免整页堆叠
@@ -954,7 +1103,7 @@
         b.classList.toggle('active', on);
         b.setAttribute('aria-selected', on ? 'true' : 'false');
       });
-      ['llm', 'prompts', 'dingtalk'].forEach((id) => {
+      ['llm', 'prompts', 'dingtalk', 'success-check'].forEach((id) => {
         const pane = $(`#settings-pane-${id}`);
         if (!pane) return;
         const on = id === next;
@@ -1222,6 +1371,168 @@
         }
       });
     }
+
+    // 成功抽检：表格勾选（可筛选）
+    const scForm = $('#success-check-form');
+    const scResult = $('#success-check-result');
+    const scCatalog = (sc.appChoices || []).map((a) => ({
+      robotUuid: String(a.robotUuid || ''),
+      name: String(a.name || a.robotUuid || ''),
+    }));
+    /** @type {Set<string>} */
+    const scSelected = new Set(
+      (sc.robotUuidAllowlist || []).map(String).filter((id) => id),
+    );
+    /** 当前筛选后可见的 uuid（用于「勾选当前筛选」） */
+    let scVisibleIds = [];
+
+    function updateScHint() {
+      const hint = $('#sc-mode-hint');
+      if (!hint) return;
+      const vis = scVisibleIds.length;
+      const total = scCatalog.length;
+      if (!scSelected.size) {
+        hint.textContent = `未限定 · 显示 ${vis}/${total} 个应用 · 全部可抽检`;
+      } else {
+        hint.textContent = `已勾选 ${scSelected.size} 个 · 显示 ${vis}/${total} 个应用`;
+      }
+    }
+
+    function renderScTable() {
+      const tbody = $('#sc-table-body');
+      if (!tbody) return;
+      const q = String($('#sc-table-filter')?.value || '')
+        .trim()
+        .toLowerCase();
+      const rows = scCatalog.filter((a) => {
+        if (!a.robotUuid) return false;
+        if (!q) return true;
+        return (
+          a.name.toLowerCase().includes(q) || a.robotUuid.toLowerCase().includes(q)
+        );
+      });
+      scVisibleIds = rows.map((a) => a.robotUuid);
+
+      if (!rows.length) {
+        tbody.innerHTML = `<tr><td colspan="3" class="sc-table-empty">${
+          q ? '无匹配应用' : '暂无应用'
+        }</td></tr>`;
+        updateScHint();
+        return;
+      }
+
+      tbody.innerHTML = rows
+        .map((a) => {
+          const checked = scSelected.has(a.robotUuid);
+          return `<tr class="sc-row${checked ? ' is-checked' : ''}" data-id="${esc(a.robotUuid)}">
+            <td class="sc-col-check">
+              <input type="checkbox" class="sc-row-check" value="${esc(a.robotUuid)}"
+                ${checked ? 'checked' : ''} ${scRo ? 'disabled' : ''}
+                aria-label="选择 ${esc(a.name)}" />
+            </td>
+            <td class="sc-col-name">${esc(a.name)}</td>
+            <td class="sc-col-id"><code>${esc(a.robotUuid)}</code></td>
+          </tr>`;
+        })
+        .join('');
+
+      if (!scRo) {
+        tbody.querySelectorAll('.sc-row-check').forEach((box) => {
+          box.addEventListener('change', () => {
+            const id = box.value;
+            if (box.checked) scSelected.add(id);
+            else scSelected.delete(id);
+            const tr = box.closest('tr');
+            if (tr) tr.classList.toggle('is-checked', box.checked);
+            updateScHint();
+          });
+        });
+        // 点行也可切换（除了点 checkbox 本身）
+        tbody.querySelectorAll('tr.sc-row').forEach((tr) => {
+          tr.addEventListener('click', (e) => {
+            if (e.target && e.target.closest && e.target.closest('input')) return;
+            const box = tr.querySelector('.sc-row-check');
+            if (!box || box.disabled) return;
+            box.checked = !box.checked;
+            box.dispatchEvent(new Event('change'));
+          });
+        });
+      }
+      updateScHint();
+    }
+
+    renderScTable();
+
+    const scFilter = $('#sc-table-filter');
+    if (scFilter) {
+      scFilter.addEventListener('input', () => renderScTable());
+    }
+
+    const btnScVisible = $('#btn-sc-check-visible');
+    if (btnScVisible && !scRo) {
+      btnScVisible.addEventListener('click', () => {
+        scVisibleIds.forEach((id) => scSelected.add(id));
+        renderScTable();
+      });
+    }
+
+    const btnScClear = $('#btn-sc-clear');
+    if (btnScClear && !scRo) {
+      btnScClear.addEventListener('click', () => {
+        scSelected.clear();
+        renderScTable();
+      });
+    }
+
+    if (scForm) {
+      scForm.addEventListener('submit', async (ev) => {
+        ev.preventDefault();
+        const btn = scForm.querySelector('button[type=submit]');
+        if (btn) {
+          btn.disabled = true;
+          btn.textContent = '保存中…';
+        }
+        if (scResult) scResult.textContent = '';
+        try {
+          const fd = new FormData(scForm);
+          const ids = [...scSelected];
+          const body = {
+            enabled: scForm.querySelector('[name=enabled]')?.checked === true,
+            maxPerPoll: parseInt(String(fd.get('maxPerPoll') || '25'), 10),
+            maxPerAppPerPoll: parseInt(String(fd.get('maxPerAppPerPoll') || '5'), 10),
+            tailSize: parseInt(String(fd.get('tailSize') || '10'), 10),
+            minIntervalMs: parseInt(String(fd.get('minIntervalMs') || '220'), 10),
+            robotUuidAllowlist: ids,
+          };
+          if (!ids.length) body.clearAllowlist = true;
+          const r = await api('/api/settings/success-check', {
+            method: 'PUT',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(body),
+          });
+          if (r && r.ok) {
+            toast('成功抽检设置已保存');
+            if (scResult) {
+              scResult.textContent = r.allowlistMode
+                ? `已限定 ${(r.robotUuidAllowlist || []).length} 个应用`
+                : '未限定应用（全量抽检，受每轮上限）';
+            }
+            await renderSettings('success-check');
+          } else {
+            toast(r.message || r.code || '保存失败');
+            if (scResult) scResult.textContent = r.message || r.code || '保存失败';
+          }
+        } catch (err) {
+          toast(err.message || '保存失败');
+          if (scResult) scResult.textContent = err.message || '保存失败';
+        } finally {
+          if (btn) {
+            btn.disabled = false;
+            btn.textContent = '保存';
+          }
+        }
+      });
+    }
   }
 
   /** 极简 Markdown → HTML（日报足够；不做完整 CommonMark） */
@@ -1342,6 +1653,181 @@
       out.push(`<pre class="md-pre"><code>${escHtml(preBuf.join('\n'))}</code></pre>`);
     }
     return out.join('\n');
+  }
+
+  async function renderPollRuns() {
+    setNav('poll-runs');
+    setHeader('拉取日志', '每次 poll 从影刀拉到的失败任务步骤日志');
+    setActiveHandoff();
+    content.innerHTML = loadingHtml('加载拉取记录…');
+
+    const data = await api('/api/poll-runs?limit=50');
+    if (!data || data.ok === false) {
+      content.innerHTML = `<div class="err">加载失败：${esc(data && (data.message || data.code))}</div>`;
+      return;
+    }
+    const list = data.runs || [];
+    content.innerHTML = `
+      <div class="actions mb">
+        <button type="button" class="btn primary" id="btn-poll-from-runs">立即拉取</button>
+        <span class="meta">保留最近约 50 次 · 仅失败任务日志</span>
+      </div>
+      <div class="panel">
+        <h2>拉取记录 <span class="meta">${list.length}</span></h2>
+        ${
+          list.length
+            ? `<div class="list">${list
+                .map((r) => {
+                  const st = r.stats || {};
+                  const sub = [
+                    pollTriggerLabel(r.trigger),
+                    `扫描 ${st.scanned ?? 0}`,
+                    `失败 ${st.failed ?? 0}`,
+                    `有日志 ${r.logJobCount ?? 0}`,
+                    r.logErrorCount ? `拉取失败 ${r.logErrorCount}` : '',
+                  ]
+                    .filter(Boolean)
+                    .join(' · ');
+                  return `<a class="list-item" href="#/poll-runs/${encodeURIComponent(r.id)}">
+                    <div class="item-main">
+                      <div class="item-title">${esc(formatTime(r.finishedAt || r.startedAt))}</div>
+                      <div class="item-sub">${esc(sub)}</div>
+                    </div>
+                    <div class="item-side">
+                      <span class="badge">${esc(pollTriggerLabel(r.trigger))}</span>
+                      <span class="faint" style="font-size:12px">查看 →</span>
+                    </div>
+                  </a>`;
+                })
+                .join('')}</div>`
+            : empty(
+                '还没有拉取记录',
+                '点上方「立即拉取」，或等定时 poll 跑完后会出现在这里',
+              )
+        }
+      </div>
+    `;
+    const btn = $('#btn-poll-from-runs');
+    if (btn) {
+      btn.onclick = () => triggerPollNow(btn);
+    }
+  }
+
+  async function renderPollRun(id) {
+    setNav('poll-runs');
+    setHeader('拉取详情', id);
+    setActiveHandoff();
+    content.innerHTML = loadingHtml('加载该次日志…');
+
+    const data = await api(`/api/poll-runs/${encodeURIComponent(id)}`);
+    if (!data || !data.ok) {
+      content.innerHTML = `
+        <div class="err">${esc((data && (data.message || data.code)) || '加载失败')}</div>
+        <div class="actions mt">
+          <a class="btn ghost" href="#/poll-runs">返回列表</a>
+        </div>`;
+      return;
+    }
+    const run = data.run || {};
+    const st = run.stats || {};
+    const win = run.window || {};
+    const jobs = run.jobs || [];
+
+    const metaBits = [
+      `触发：${pollTriggerLabel(run.trigger)}`,
+      `结束：${formatTime(run.finishedAt)}`,
+      `扫描 ${st.scanned ?? 0}`,
+      `失败 ${st.failed ?? 0}`,
+      `新入队 ${st.enqueued ?? 0}`,
+      `更新 ${st.updated ?? 0}`,
+      `有日志 ${run.logJobCount ?? 0}`,
+    ];
+    if (win.triggerTimeBegin) {
+      metaBits.push(`时间窗 ${win.triggerTimeBegin} → ${win.triggerTimeEnd}`);
+    }
+
+    content.innerHTML = `
+      <div class="actions mb">
+        <a class="btn ghost" href="#/poll-runs">← 返回列表</a>
+        <button type="button" class="btn" id="btn-poll-again">再拉一次</button>
+      </div>
+      <div class="panel mb">
+        <h2>摘要</h2>
+        <p class="meta">${metaBits.map((x) => esc(x)).join(' · ')}</p>
+        <p class="meta mono-id">id: ${esc(run.id)}</p>
+      </div>
+      <div class="panel">
+        <h2>失败任务日志 <span class="meta">${jobs.length}</span></h2>
+        ${
+          jobs.length
+            ? `<div class="poll-job-list">${jobs
+                .map((j, idx) => {
+                  const logs = j.logs || [];
+                  const errCount = logs.filter((l) => isErrorLogLevel(l.level, l.text)).length;
+                  const statusBits = [];
+                  if (j.logFetchError) statusBits.push(`日志拉取失败`);
+                  else if (j.logSkipped) statusBits.push('未拉日志');
+                  else statusBits.push(`${logs.length} 行`);
+                  if (errCount) statusBits.push(`${errCount} 错误行`);
+                  const title =
+                    j.robotName || j.taskName || j.jobUuid || j.fingerprint || `job ${idx + 1}`;
+                  const sub = [
+                    j.taskName && j.taskName !== j.robotName ? j.taskName : '',
+                    j.flowName || '',
+                    j.errorType || '',
+                    j.failureAt ? formatTime(j.failureAt) : '',
+                  ]
+                    .filter(Boolean)
+                    .join(' · ');
+                  const logHtml = j.logFetchError
+                    ? `<div class="err sm">拉取错误：${esc(j.logFetchError)}</div>`
+                    : j.logSkipped
+                      ? `<div class="meta">本轮关闭了日志补全（--no-enrich）</div>`
+                      : logs.length
+                        ? `<div class="job-log-lines" role="log">${logs
+                            .map((l) => {
+                              const err = isErrorLogLevel(l.level, l.text);
+                              const loc = [l.flowName, l.lineNumber].filter(Boolean).join(':');
+                              const meta = [loc, l.time].filter(Boolean).join(' · ');
+                              return `<div class="job-log-line${err ? ' is-error' : ''}">
+                                <span class="job-log-level">${esc(l.level || '—')}</span>
+                                <div class="job-log-main">
+                                  ${meta ? `<div class="job-log-meta">${esc(meta)}</div>` : ''}
+                                  <div class="job-log-text">${esc(l.text || '')}</div>
+                                </div>
+                              </div>`;
+                            })
+                            .join('')}</div>`
+                        : `<div class="meta">无步骤日志</div>`;
+                  const fpLink = j.fingerprint
+                    ? `<a class="btn sm ghost" href="#/findings/${encodeURIComponent(j.fingerprint)}">问题详情</a>`
+                    : '';
+                  const appLink = j.robotUuid
+                    ? `<a class="btn sm ghost" href="#/apps/${encodeURIComponent(j.robotUuid)}">应用</a>`
+                    : '';
+                  return `<details class="poll-job" ${idx === 0 ? 'open' : ''}>
+                    <summary>
+                      <span class="poll-job-title">${esc(title)}</span>
+                      <span class="poll-job-meta">${esc(statusBits.join(' · '))}</span>
+                    </summary>
+                    <div class="poll-job-body">
+                      ${sub ? `<p class="item-sub">${esc(sub)}</p>` : ''}
+                      ${j.remark ? `<p class="poll-job-remark">${esc(j.remark)}</p>` : ''}
+                      <div class="meta mono-id mb">jobUuid: ${esc(j.jobUuid || '—')}${
+                        j.fingerprint ? ` · fp: ${esc(j.fingerprint)}` : ''
+                      }</div>
+                      <div class="actions mb sm-actions">${fpLink}${appLink}</div>
+                      ${logHtml}
+                    </div>
+                  </details>`;
+                })
+                .join('')}</div>`
+            : empty('本次无失败任务', '没有可展示的 job 日志')
+        }
+      </div>
+    `;
+    const again = $('#btn-poll-again');
+    if (again) again.onclick = () => triggerPollNow(again);
   }
 
   async function renderReports() {
@@ -1543,11 +2029,23 @@
         ];
         if (s.urgent) parts.push(`紧急 ${s.urgent}`);
         if (s.truncated) parts.push('已达翻页上限');
+        if (s.soft && s.soft.enabled !== false) {
+          parts.push(
+            `成功抽检 ${s.soft.audited ?? 0}（命中 ${s.soft.softHit ?? 0}）`,
+          );
+        }
+        if (r.pollRun && r.pollRun.id) {
+          parts.push(`日志 ${r.pollRun.logJobCount ?? 0} 条已归档`);
+        }
         toast(parts.join(' · '), 5000);
         // 刷新 UI 失败不应掩盖「拉取已成功」（lastPollAt 已更新）
         try {
           await refreshRuntime();
-          if (location.hash === '' || location.hash === '#' || location.hash === '#/') {
+          const h = location.hash || '';
+          // 在「拉取日志」页：跳到本次详情；在总览：刷新当前页
+          if (h.startsWith('#/poll-runs') && r.pollRun && r.pollRun.id) {
+            location.hash = `#/poll-runs/${encodeURIComponent(r.pollRun.id)}`;
+          } else if (h === '' || h === '#' || h === '#/' || h.startsWith('#/poll-runs')) {
             await route();
           }
         } catch (refreshErr) {
@@ -2450,7 +2948,12 @@
           if (occ) subBits.push(occ);
           const sub = subBits.join(' · ');
 
+          const softBadge =
+            item.failureKind === 'soft'
+              ? '<span class="badge warn" title="成功抽检：任务状态成功，日志末尾有错误">抽检命中</span>'
+              : '';
           const badges =
+            softBadge +
             bucketBadgeHtml(item) +
             (item.reasonLabels || [])
               .map((lab, i) => {
@@ -3143,9 +3646,11 @@
     let agentPrompt = handoffRes.ok ? handoffRes.markdown || '' : '';
     setActiveHandoff({ path: xbotDir, agentPrompt });
 
+    const isSoft = f.failureKind === 'soft' || data.failureKind === 'soft';
     setHeader(
       f.robotName || appName || fingerprint,
       [
+        isSoft ? '抽检命中' : '',
         f.errorType || '',
         // 影刀语境：机器人 = 运行客户端，不是应用名
         f.robotClientName ? `机器人 ${f.robotClientName}` : '',
@@ -3170,6 +3675,11 @@
         ${robotUuid ? ` / <a href="#/apps/${encodeURIComponent(robotUuid)}">${esc(f.robotName || robotUuid)}</a>` : ''}
         / 问题
       </div>
+      ${
+        isSoft
+          ? `<div class="tip" role="note"><p><strong>成功抽检命中</strong>：影刀任务状态为成功，但步骤日志<strong>末尾</strong>出现错误（常见于流程 try-catch 吞掉）。请结合日志与流程排查，勿仅凭任务成功判断业务正常。</p></div>`
+          : ''
+      }
 
       ${handoffBarHtml({
         xbotDir,
@@ -3940,6 +4450,8 @@
       if (r.name === 'finding') await renderFinding(r.fingerprint);
       else if (r.name === 'reports') await renderReports();
       else if (r.name === 'report') await renderReport(r.date);
+      else if (r.name === 'poll-runs') await renderPollRuns();
+      else if (r.name === 'poll-run') await renderPollRun(r.id);
       else if (r.name === 'settings') await renderSettings(r.tab);
       else if (r.name === 'apps') await renderApps();
       else if (r.name === 'app') {

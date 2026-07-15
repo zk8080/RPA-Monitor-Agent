@@ -628,9 +628,12 @@ function listAppsWithStats(cfg) {
   const apps = [];
 
   // 1) 本机已安装应用（任务名来自 task-index + 失败 queue）
+  // scan 可能因多用户目录/重复路径给出同 robotUuid，必须按 uuid 去重
   for (const a of scan.apps || []) {
-    seen.add(a.robotUuid);
-    apps.push(buildAppListRow(a, queueStats.get(a.robotUuid), byRobotTask[a.robotUuid]));
+    const id = a && a.robotUuid ? String(a.robotUuid) : '';
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    apps.push(buildAppListRow(a, queueStats.get(id), byRobotTask[id]));
   }
 
   // 2) queue 失败应用（本机未安装）
@@ -797,6 +800,7 @@ function enrichFailureItem(it, cfg) {
   const failAt = failureTimeOf(it);
   const bucketInfo = bucketLib.classifyBucket(it, triage);
   const ws = workStatusLib.resolveEffectiveWorkStatus(it);
+  const failureKind = it.failureKind === 'soft' ? 'soft' : 'hard';
   return {
     fingerprint: it.fingerprint,
     flowName: it.flowName,
@@ -820,6 +824,10 @@ function enrichFailureItem(it, cfg) {
     taskName: it.taskName || null,
     robotClientName: it.robotClientName || null,
     robotClientUuid: it.robotClientUuid || null,
+    // soft=成功抽检命中（任务成功但日志尾部有错）
+    failureKind,
+    failureKindLabel: failureKind === 'soft' ? '抽检命中' : '任务失败',
+    jobStatus: it.jobStatus || null,
     fixClass: triage.fixClass,
     fixability: triage.fixability,
     canPreviewFix: canPreviewFix(triage),
@@ -908,6 +916,9 @@ function getFindingDetail(fingerprint, cfg) {
     robotClientName: item.robotClientName || null,
     robotClientUuid: item.robotClientUuid || null,
     taskName: item.taskName || null,
+    failureKind: enriched.failureKind,
+    failureKindLabel: enriched.failureKindLabel,
+    jobStatus: enriched.jobStatus,
     kb: kbEntry
       ? {
           id: kbEntry.id,
@@ -1266,6 +1277,7 @@ async function runManualPoll(cfg, input = {}) {
 
     const pollOpts = {
       enrichLogs: input.enrichLogs !== false,
+      trigger: 'manual',
     };
     if (input.lookbackHours != null && Number.isFinite(Number(input.lookbackHours))) {
       pollOpts.lookbackHours = Number(input.lookbackHours);
@@ -1295,7 +1307,9 @@ async function runManualPoll(cfg, input = {}) {
         findings: stats.findings || 0,
         regressed: stats.regressed || 0,
         verified: stats.verified || 0,
+        soft: stats.soft || null,
       },
+      pollRun: result.pollRun || null,
       cursor: result.cursor || null,
     };
   } catch (e) {
@@ -1334,6 +1348,24 @@ function summarizeSkillResult(result) {
 
 function isSafeReportDate(dateKey) {
   return /^\d{4}-\d{2}-\d{2}$/.test(String(dateKey || ''));
+}
+
+/**
+ * 列出每次 poll 的 job 日志档案
+ */
+function listPollRuns(cfg, opts = {}) {
+  // eslint-disable-next-line global-require
+  const pollRuns = require('./poll-runs');
+  return pollRuns.listRuns(cfg.dataDir, opts);
+}
+
+/**
+ * 单次 poll 档案详情（含 jobs[].logs）
+ */
+function getPollRun(cfg, id) {
+  // eslint-disable-next-line global-require
+  const pollRuns = require('./poll-runs');
+  return pollRuns.getRun(cfg.dataDir, id);
 }
 
 /**
@@ -1634,6 +1666,38 @@ function getLlmSettings(cfg) {
 /**
  * 钉钉机器人设置（脱敏 GET / 保存 / 测试发送）
  */
+/**
+ * 成功抽检设置（Web）
+ */
+function getSuccessCheckSettings(cfg) {
+  // eslint-disable-next-line global-require
+  const settingsSc = require('./settings-success-check');
+  const wb = getWorkbenchConfig(cfg);
+  let apps = [];
+  try {
+    const listed = listAppsWithStats(cfg);
+    apps = (listed && listed.apps) || [];
+  } catch {
+    apps = [];
+  }
+  const pub = settingsSc.getPublicSettings(cfg, { apps });
+  return {
+    ...pub,
+    settingsEnabled: wb.settingsEnabled !== false,
+  };
+}
+
+function saveSuccessCheckSettingsFromWeb(cfg, body) {
+  // eslint-disable-next-line global-require
+  const settingsSc = require('./settings-success-check');
+  const wb = getWorkbenchConfig(cfg);
+  const saved = settingsSc.saveSettings(cfg.dataDir, body || {}, {
+    settingsEnabled: wb.settingsEnabled,
+  });
+  if (!saved.ok) return saved;
+  return { ...getSuccessCheckSettings(cfg), ok: true, saved: true };
+}
+
 function getDingtalkSettings(cfg) {
   // eslint-disable-next-line global-require
   const settingsDt = require('./settings-dingtalk');
@@ -1852,6 +1916,8 @@ module.exports = {
   getPatchDetail,
   runWorkbenchAction,
   runManualPoll,
+  listPollRuns,
+  getPollRun,
   listReports,
   getReport,
   generateReport,
@@ -1861,6 +1927,8 @@ module.exports = {
   getDingtalkSettings,
   saveDingtalkSettingsFromWeb,
   sendDingtalkDigestFromWeb,
+  getSuccessCheckSettings,
+  saveSuccessCheckSettingsFromWeb,
   getBusinessBriefPromptSettings,
   saveBusinessBriefPromptSettings,
   resetBusinessBriefPromptSettings,

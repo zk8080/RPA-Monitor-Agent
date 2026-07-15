@@ -61,7 +61,8 @@ function printHelp() {
   - 每轮 poll 后 drain 未诊断队列（limit）
   - 默认是否 LLM：settings.llm.json 的 diagnoseUseLlm（可用 --llm / --no-llm 覆盖）
   - diagnoseCron / reportCron（分 时 * * *）触发额外诊断/日报
-  - 日报后：若启用钉钉（data/settings.dingtalk.json）则推送晨间摘要（无异常也发）
+  - 钉钉晨报：仅在 reportCron（默认约 9:05）后推送；boot / 定时 poll 不发
+  - 同一本机日历日成功后不再重复发（设置页「发送测试」可 force 绕过）
   - healthPort>0 时提供 GET /health + 本机工作台 http://127.0.0.1:<port>/
   - data/service.pid 单实例锁
 `);
@@ -76,7 +77,12 @@ async function maybeSendMorningDigest(cfg, logFn) {
     const rt = settingsDt.getRuntimeConfig(cfg.dataDir);
     if (!rt.enabled || !rt.webhookUrl) return;
     const r = await sendMorningDigest(cfg, { force: false });
-    if (r.skipped) return;
+    if (r.skipped) {
+      if (r.code === 'already_sent_today') {
+        logFn(`  dingtalk morning skip: ${r.message || r.code}`);
+      }
+      return;
+    }
     if (r.ok) {
       logFn(
         `  dingtalk morning ok healthy=${r.stats && r.stats.healthy} total=${
@@ -142,12 +148,18 @@ async function runPipeline(cfg, opts, label = 'cycle') {
 
   log(`▶ ${label}: poll`);
   // 翻页上限走配置 pollMaxPages（默认 50），不再写死 3 页≈150 条
-  const pollResult = await pollOnce(liveCfg, { enrichLogs: true });
+  const pollTrigger = label === 'boot' ? 'boot' : 'interval';
+  const pollResult = await pollOnce(liveCfg, { enrichLogs: true, trigger: pollTrigger });
+  const soft = pollResult.stats && pollResult.stats.soft;
   log(
     `  poll done scanned=${pollResult.stats.scanned} failed=${pollResult.stats.failed} ` +
       `new=${pollResult.stats.enqueued} updated=${pollResult.stats.updated}` +
       (pollResult.stats.regressed ? ` regressed=${pollResult.stats.regressed}` : '') +
-      (pollResult.stats.verified ? ` verified=${pollResult.stats.verified}` : ''),
+      (pollResult.stats.verified ? ` verified=${pollResult.stats.verified}` : '') +
+      (pollResult.pollRun ? ` run=${pollResult.pollRun.id} logs=${pollResult.pollRun.logJobCount}` : '') +
+      (soft && soft.enabled !== false
+        ? ` soft=audited:${soft.audited || 0}/hit:${soft.softHit || 0}/clean:${soft.clean || 0}`
+        : ''),
   );
 
   let diagnoseResult = null;
@@ -189,8 +201,15 @@ async function runPipeline(cfg, opts, label = 'cycle') {
     log(`▶ ${label}: report`);
     reportResult = buildDailyReport(liveCfg, { write: true });
     log(`  report → ${reportResult.filePath} roots=${reportResult.stats.rootCauseCount}`);
-    // 晨间钉钉：日报后固定推送（无异常也发；未启用则跳过）
-    await maybeSendMorningDigest(liveCfg, log);
+    // 钉钉：boot 只写日报不推；定时 cron / --once 才走推送（且一日一次）
+    // sendDigest 显式 false 关闭；未指定时 boot 默认关，其余默认开
+    const sendDigest =
+      opts.sendDigest != null ? opts.sendDigest !== false : label !== 'boot';
+    if (sendDigest) {
+      await maybeSendMorningDigest(liveCfg, log);
+    } else {
+      log('  dingtalk morning skip: boot/report-only（仅 reportCron 或 --once 推送）');
+    }
   }
 
   return { pollResult, diagnoseResult, reportResult };

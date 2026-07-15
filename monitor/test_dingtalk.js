@@ -137,6 +137,35 @@ async function testDigest() {
   const send = await morning.sendMorningDigest(cfg, { force: false });
   assert.ok(send.skipped || send.code === 'disabled' || send.code === 'not_configured');
 
+  // 一日一次：模拟今日已成功发送 → 自动路径 skip
+  settingsDt.saveDingtalkSettings(dir, {
+    enabled: true,
+    webhookUrl: 'https://oapi.dingtalk.com/robot/send?access_token=t',
+  });
+  settingsDt.recordSendResult(dir, { ok: true });
+  assert.strictEqual(morning.alreadySentToday(dir), true);
+  const skip = await morning.sendMorningDigest(cfg, { force: false });
+  assert.strictEqual(skip.skipped, true);
+  assert.strictEqual(skip.code, 'already_sent_today');
+
+  // 失败发送不计入「今日已发」
+  settingsDt.recordSendResult(dir, { ok: false, error: 'mock fail' });
+  assert.strictEqual(morning.alreadySentToday(dir), false);
+
+  // 非今日 lastSendAt → 不算已发
+  const yday = new Date();
+  yday.setDate(yday.getDate() - 1);
+  const prev = settingsDt.readSettingsFile(dir, { force: true });
+  settingsDt.writeSettingsFile(dir, {
+    ...prev,
+    lastSendAt: yday.toISOString(),
+    lastSendOk: true,
+    lastSendError: null,
+  });
+  assert.strictEqual(morning.alreadySentToday(dir), false);
+
+  assert.ok(morning.localDateKey().length === 10);
+
   fs.rmSync(dir, { recursive: true, force: true });
   console.log('ok digest');
 }

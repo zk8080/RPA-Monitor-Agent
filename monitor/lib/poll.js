@@ -6,6 +6,8 @@
 const yingdao = require('./yingdao');
 const { buildFingerprint, isFailedStatus, isUrgentRemark } = require('./fingerprint');
 const memory = require('./memory');
+const pollRuns = require('./poll-runs');
+const softAudit = require('./soft-audit');
 
 /**
  * 影刀时间格式：yyyy-MM-dd HH:mm:ss（本地时区）
@@ -27,10 +29,17 @@ function formatYingdaoDateTime(d) {
  *   lookbackHours?: number,
  *   triggerTimeBegin?: string,
  *   triggerTimeEnd?: string,
+ *   trigger?: string,
+ *   savePollRun?: boolean,
+ *   softFail?: boolean,
+ *   maxSoftPerPoll?: number,
  * }} [options]
  */
 async function pollOnce(cfg, options = {}) {
   const enrichLogs = options.enrichLogs !== false;
+  const savePollRun = options.savePollRun !== false;
+  const trigger = options.trigger || 'unknown';
+  const startedAt = new Date().toISOString();
   const lookbackHours = Number(
     options.lookbackHours != null ? options.lookbackHours : cfg.pollLookbackHours != null ? cfg.pollLookbackHours : 24,
   );
@@ -41,6 +50,10 @@ async function pollOnce(cfg, options = {}) {
 
   const dataDir = cfg.dataDir;
   memory.ensureDir(dataDir);
+
+  // 全局限流：失败 enrich + soft 共用（默认 ≤~4.5/s）
+  const softCfgPreview = softAudit.getSoftConfig(cfg, options);
+  yingdao.configureLogSearchRate({ minIntervalMs: softCfgPreview.minIntervalMs });
 
   const token = await yingdao.getToken({
     accessKeyId: cfg.accessKeyId,
@@ -79,6 +92,7 @@ async function pollOnce(cfg, options = {}) {
     /** 任务名索引：扫到的 job 条数（含成功） */
     taskNameJobs: 0,
     taskNameRobots: 0,
+    soft: null,
   };
 
   const samples = [];
@@ -86,6 +100,12 @@ async function pollOnce(cfg, options = {}) {
   const seenFp = new Set();
   /** 本轮所有 job（含成功）用于写 task-index */
   const taskNameJobs = [];
+  /** 本轮失败 / soft 日志档案（写入 data/poll-runs） */
+  const archivedJobs = [];
+  /** 同 jobUuid 只归档一次（时间窗内可能重复扫到） */
+  const archivedJobUuids = new Set();
+  /** 成功 job：本轮结束后做 soft 尾部审计 */
+  const successJobs = [];
 
   while (pages < maxPages) {
     const result = await yingdao.listJobs(token, {
@@ -118,6 +138,12 @@ async function pollOnce(cfg, options = {}) {
         });
       }
 
+      // 成功：收集供 soft 审计（本轮 list 结束后配额抽检）
+      if (softAudit.isSuccessStatus(job.status)) {
+        if (job.jobUuid) successJobs.push(job);
+        continue;
+      }
+
       if (!isFailedStatus(job.status)) continue;
       stats.failed += 1;
 
@@ -131,9 +157,14 @@ async function pollOnce(cfg, options = {}) {
         jobUuid: job.jobUuid,
       });
 
-      if (enrichLogs && fp.needsLogEnrichment && job.jobUuid) {
+      // 失败 job：默认拉步骤日志（档案 + 指纹补全）；--no-enrich 跳过
+      let jobLogs = null;
+      let logFetchError = null;
+      let logSkipped = false;
+      if (enrichLogs && job.jobUuid) {
         try {
           const logRes = await yingdao.searchLogs(token, job.jobUuid, { page: 1, size: 100 });
+          jobLogs = logRes.logs || [];
           stats.enriched += 1;
           fp = buildFingerprint({
             robotUuid: job.robotUuid,
@@ -143,14 +174,17 @@ async function pollOnce(cfg, options = {}) {
             robotClientUuid: job.robotClientUuid,
             remark: job.remark,
             jobUuid: job.jobUuid,
-            logs: logRes.logs,
+            logs: jobLogs,
           });
         } catch (e) {
+          logFetchError = e.message || String(e);
           fp = {
             ...fp,
-            rawRemark: `${fp.rawRemark || job.remark || ''} [log_fetch_error: ${e.message}]`.trim(),
+            rawRemark: `${fp.rawRemark || job.remark || ''} [log_fetch_error: ${logFetchError}]`.trim(),
           };
         }
+      } else if (!enrichLogs) {
+        logSkipped = true;
       }
 
       if (isUrgentRemark(job.remark || fp.rawRemark)) {
@@ -170,10 +204,18 @@ async function pollOnce(cfg, options = {}) {
       const existed = memory.loadQueueItem(dataDir, fp.fingerprint);
       const prevJobs = existed?.sampleJobUuids ? [...existed.sampleJobUuids] : [];
       const failureAt = memory.pickJobFailureAt(job);
-      const item = memory.upsertQueueItem(dataDir, fp, {
-        jobUuid: job.jobUuid,
-        failureAt: failureAt || undefined,
-      });
+      const item = memory.upsertQueueItem(
+        dataDir,
+        {
+          ...fp,
+          failureKind: 'hard',
+          jobStatus: String(job.status || ''),
+        },
+        {
+          jobUuid: job.jobUuid,
+          failureAt: failureAt || undefined,
+        },
+      );
       if (existed) stats.updated += 1;
       else stats.enqueued += 1;
 
@@ -219,6 +261,29 @@ async function pollOnce(cfg, options = {}) {
         }
       }
 
+      // 拉取档案：失败 job 去重后收录（含日志 / 错误 / 跳过）
+      const jid = job.jobUuid || '';
+      if (!jid || !archivedJobUuids.has(jid)) {
+        if (jid) archivedJobUuids.add(jid);
+        archivedJobs.push({
+          jobUuid: jid,
+          robotUuid: job.robotUuid || item.robotUuid || '',
+          robotName: job.robotName || item.robotName || '',
+          taskName: job.taskName || item.taskName || '',
+          robotClientName: job.robotClientName || item.robotClientName || '',
+          status: job.status || '',
+          fingerprint: fp.fingerprint || item.fingerprint || '',
+          failureAt: failureAt || null,
+          remark: job.remark || fp.rawRemark || '',
+          flowName: fp.flowName || item.flowName || '',
+          lineNumber: fp.lineNumber || item.lineNumber || '',
+          errorType: fp.errorType || item.errorType || '',
+          logs: jobLogs || [],
+          logFetchError,
+          logSkipped,
+          failureKind: 'hard',
+        });
+      }
 
       if (samples.length < 8) {
         samples.push({
@@ -244,6 +309,42 @@ async function pollOnce(cfg, options = {}) {
 
   if (pages >= maxPages) {
     stats.truncated = true;
+  }
+
+  // 成功 job soft 审计：新 jobUuid + 配额 + 倒序末 K 条（限流与失败 enrich 共用）
+  try {
+    const softRes = await softAudit.auditSuccessJobs(token, dataDir, successJobs, cfg, options);
+    stats.soft = softRes.stats || null;
+    if (softRes.stats && softRes.stats.softEnqueued) {
+      stats.enqueued += softRes.stats.softEnqueued;
+    }
+    if (softRes.stats && softRes.stats.softUpdated) {
+      stats.updated += softRes.stats.softUpdated;
+    }
+    for (const row of softRes.archivedJobs || []) {
+      const jid = row.jobUuid || '';
+      if (jid && archivedJobUuids.has(jid)) continue;
+      if (jid) archivedJobUuids.add(jid);
+      archivedJobs.push(row);
+      // soft 命中计入 findings 样例
+      if (row.failureKind === 'soft' && row.fingerprint && !seenFp.has(row.fingerprint)) {
+        seenFp.add(row.fingerprint);
+        findings.push({
+          fingerprint: row.fingerprint,
+          robotUuid: row.robotUuid,
+          robotName: row.robotName,
+          jobUuid: row.jobUuid,
+          status: row.status,
+          triggerTime: row.failureAt || null,
+          failureAt: row.failureAt || null,
+          count: 1,
+          failureKind: 'soft',
+        });
+      }
+    }
+  } catch (e) {
+    stats.soft = { enabled: true, error: e.message || String(e) };
+    console.error(`⚠️ soft-audit 失败: ${e.message || e}`);
   }
 
   // 任务名索引：本轮扫到的全部 job（含成功）写入 data/task-index.json
@@ -284,11 +385,48 @@ async function pollOnce(cfg, options = {}) {
     // ignore
   }
 
+  const statsOut = { ...stats, findings: findings.length };
+
+  /** @type {object|null} */
+  let pollRun = null;
+  if (savePollRun) {
+    try {
+      const maxRuns =
+        cfg.pollRunsMax != null
+          ? Number(cfg.pollRunsMax)
+          : process.env.POLL_RUNS_MAX != null
+            ? Number(process.env.POLL_RUNS_MAX)
+            : undefined;
+      pollRun = pollRuns.saveRun(dataDir, {
+        trigger,
+        startedAt,
+        finishedAt: now,
+        stats: statsOut,
+        window: {
+          lookbackHours: stats.lookbackHours,
+          triggerTimeBegin: stats.triggerTimeBegin,
+          triggerTimeEnd: stats.triggerTimeEnd,
+        },
+        jobs: archivedJobs,
+        maxRuns,
+      });
+    } catch (e) {
+      console.error(`⚠️ 写入 poll-runs 失败: ${e.message || e}`);
+    }
+  }
+
   return {
-    stats: { ...stats, findings: findings.length },
+    stats: statsOut,
     samples,
     findings,
     verify: verifyTick,
+    pollRun: pollRun
+      ? {
+          id: pollRun.id,
+          jobCount: pollRun.jobCount,
+          logJobCount: pollRun.logJobCount,
+        }
+      : null,
     cursor: {
       lastNextId,
       lastPollAt: now,

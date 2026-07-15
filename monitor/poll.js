@@ -59,6 +59,7 @@ function printHelp() {
 
   const pollOpts = {
     enrichLogs: opts.enrichLogs,
+    trigger: 'cli',
   };
   if (opts.maxPages != null) pollOpts.maxPages = opts.maxPages;
   if (opts.lookbackHours != null) pollOpts.lookbackHours = opts.lookbackHours;
@@ -70,7 +71,7 @@ function printHelp() {
   );
   const result = await pollOnce(cfg, pollOpts);
 
-  const { stats, samples, cursor } = result;
+  const { stats, samples, cursor, pollRun } = result;
   console.log('\n── 结果 ──');
   if (stats.triggerTimeBegin) {
     console.log(`时间窗: ${stats.triggerTimeBegin}  →  ${stats.triggerTimeEnd}  (${stats.lookbackHours}h)`);
@@ -83,6 +84,11 @@ function printHelp() {
       (stats.truncated ? '  ⚠️ truncated=maxPages' : ''),
   );
   console.log(`lastPollAt=${cursor.lastPollAt}`);
+  if (pollRun) {
+    console.log(
+      `poll-run: id=${pollRun.id} jobs=${pollRun.jobCount} withLogs=${pollRun.logJobCount}`,
+    );
+  }
 
   if (samples.length) {
     console.log('\nqueue 样例:');

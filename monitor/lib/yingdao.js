@@ -16,6 +16,38 @@ const tokenCache = {
   key: '',
 };
 
+/**
+ * job/log/search 全进程共享限流（影刀约 5 次/秒）
+ * 失败补全与 soft 审计共用，默认间隔 220ms ≈ 4.5/s，留余量
+ */
+const logSearchRate = {
+  minIntervalMs: 220,
+  lastAt: 0,
+};
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * @param {{ minIntervalMs?: number }} [opts]
+ */
+function configureLogSearchRate(opts = {}) {
+  if (opts.minIntervalMs != null) {
+    const n = Number(opts.minIntervalMs);
+    if (Number.isFinite(n) && n >= 0) logSearchRate.minIntervalMs = n;
+  }
+}
+
+async function throttleLogSearch() {
+  const min = logSearchRate.minIntervalMs;
+  if (!(min > 0)) return;
+  const now = Date.now();
+  const wait = logSearchRate.lastAt + min - now;
+  if (wait > 0) await sleep(wait);
+  logSearchRate.lastAt = Date.now();
+}
+
 async function http(url, options = {}) {
   const res = await fetch(url, options);
   const text = await res.text();
@@ -173,6 +205,11 @@ async function listJobs(token, opts = {}) {
  *   payload: object,
  * }>}
  */
+/**
+ * @param {string} token
+ * @param {string} jobUuid
+ * @param {{ page?: number, size?: number, searchKey?: string, sort?: string, skipThrottle?: boolean }} [opts]
+ */
 async function searchLogs(token, jobUuid, opts = {}) {
   if (!jobUuid) throw new Error('searchLogs 需要 jobUuid');
 
@@ -180,17 +217,28 @@ async function searchLogs(token, jobUuid, opts = {}) {
   const size = opts.size ?? 100;
   const payload = { jobUuid, page, size };
 
+  // 倒序：用于「末尾 K 条」软失败审计；值以影刀文档为准，默认 desc
   if (opts.searchKey || opts.sort) {
     payload.queryFilter = {};
     if (opts.searchKey) payload.queryFilter.searchKey = opts.searchKey;
     if (opts.sort) payload.queryFilter.sort = opts.sort;
   }
 
-  const { status, body } = await http(`${BASE}/dispatch/v2/job/log/search`, {
-    method: 'POST',
-    headers: authHeaders(token),
-    body: JSON.stringify(payload),
-  });
+  const doRequest = async () => {
+    if (!opts.skipThrottle) await throttleLogSearch();
+    return http(`${BASE}/dispatch/v2/job/log/search`, {
+      method: 'POST',
+      headers: authHeaders(token),
+      body: JSON.stringify(payload),
+    });
+  };
+
+  let { status, body } = await doRequest();
+  // 简易 429 退避一次
+  if (status === 429 || (body && (body.code === 429 || /频率|限流|too many/i.test(String(body.msg || body.message || ''))))) {
+    await sleep(Math.max(logSearchRate.minIntervalMs * 2, 1000));
+    ({ status, body } = await doRequest());
+  }
 
   return {
     logs: extractLogList(body),
@@ -208,6 +256,11 @@ function clearTokenCache() {
   tokenCache.key = '';
 }
 
+/** 测试用：重置限流时钟 */
+function resetLogSearchRate() {
+  logSearchRate.lastAt = 0;
+}
+
 module.exports = {
   BASE,
   getToken,
@@ -215,4 +268,7 @@ module.exports = {
   searchLogs,
   extractLogList,
   clearTokenCache,
+  configureLogSearchRate,
+  resetLogSearchRate,
+  throttleLogSearch,
 };

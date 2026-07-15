@@ -95,6 +95,22 @@ module.exports = {
   // 0=关闭 HTTP；>0 时绑定 127.0.0.1：/health + 本机工作台 /
   healthPort: 8787,
 
+  // ===== 成功抽检（成功 job 末尾日志 → soft finding；Web 设置页可改白名单）=====
+  // 优先读 data/settings.success-check.json；以下为 config 底稿。
+  // 影刀 log/search 约 5 次/秒；与失败补全共用限流。只扫「尚未审计」的 jobUuid。
+  // 环境变量：SOFT_FAIL=0 关闭；SOFT_FAIL_MAX_PER_POLL；YD_LOG_SEARCH_MIN_INTERVAL_MS
+  softFail: {
+    enabled: true,
+    maxPerPoll: 25, // 每轮最多抽检多少个成功 job
+    maxPerAppPerPoll: 5, // 每应用每轮上限
+    tailSize: 10, // 倒序取末尾条数
+    sort: 'desc', // queryFilter.sort；若实测无效可改文档枚举值
+    minIntervalMs: 220, // search_logs 间隔，≈4.5/s < 5
+    retainDays: 14, // data/soft-audit.json 保留天数
+    // robotUuidAllowlist: [], // 非空则只抽检这些应用
+    // robotUuidPriority: [], // 配额内优先这些应用
+  },
+
   // ===== 本机开发者工作台（S25）=====
   workbench: {
     enabled: true, // false：仅 /health，不挂 /api 与静态页

@@ -161,6 +161,32 @@ async function handleRequest(req, res, ctx) {
         return true;
       }
 
+      // 成功抽检（成功任务末尾日志）
+      if (
+        method === 'GET' &&
+        (pathname === '/api/settings/success-check' || pathname === '/api/settings/soft-fail')
+      ) {
+        sendJson(res, 200, workbench.getSuccessCheckSettings(cfg));
+        return true;
+      }
+      if (
+        method === 'PUT' &&
+        (pathname === '/api/settings/success-check' || pathname === '/api/settings/soft-fail')
+      ) {
+        let body = {};
+        try {
+          const raw = await readBody(req);
+          if (raw) body = JSON.parse(raw);
+        } catch {
+          sendJson(res, 400, { ok: false, code: 'bad_json', message: '请求体须为 JSON' });
+          return true;
+        }
+        const result = workbench.saveSuccessCheckSettingsFromWeb(cfg, body);
+        const status = result.ok ? 200 : result.code === 'settings_disabled' ? 403 : 400;
+        sendJson(res, status, result);
+        return true;
+      }
+
       // 钉钉机器人晨报
       if (method === 'GET' && pathname === '/api/settings/dingtalk') {
         sendJson(res, 200, workbench.getDingtalkSettings(cfg));
@@ -466,6 +492,23 @@ async function handleRequest(req, res, ctx) {
         const patchId = decodeURIComponent(patchGet[1]);
         const result = workbench.getPatchDetail(cfg, patchId);
         sendJson(res, result.ok ? 200 : 404, result);
+        return true;
+      }
+
+      // 拉取日志档案（每次 poll 的影刀 job 步骤日志）
+      if (method === 'GET' && pathname === '/api/poll-runs') {
+        const result = workbench.listPollRuns(cfg, {
+          limit: parseInt(url.searchParams.get('limit') || '50', 10),
+        });
+        sendJson(res, 200, result);
+        return true;
+      }
+
+      const pollRunGet = pathname.match(/^\/api\/poll-runs\/([^/]+)\/?$/);
+      if (method === 'GET' && pollRunGet) {
+        const id = decodeURIComponent(pollRunGet[1]);
+        const result = workbench.getPollRun(cfg, id);
+        sendJson(res, result.ok ? 200 : result.code === 'not_found' ? 404 : 400, result);
         return true;
       }
 
