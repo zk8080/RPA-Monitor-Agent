@@ -1084,7 +1084,7 @@ a.list-item:hover .item-go,
   color: var(--text-3);
   white-space: nowrap;
 }
-/* Segmented control — workStatus open | snoozed | ignored */
+/* Segmented control — workStatus open | snoozed | resolved | ignored */
 .seg {
   display: inline-flex;
   flex-wrap: wrap;
@@ -1134,6 +1134,22 @@ a.list-item:hover .item-go,
   border-color: rgba(180, 83, 9, 0.22);
   background: var(--warn-bg);
 }
+.seg-btn.is-active[data-work='resolved'] {
+  color: var(--ok);
+  border-color: rgba(4, 120, 87, 0.22);
+  background: var(--ok-bg);
+}
+/* 处理完成终态：徽章 + 补充说明 / 恢复 */
+.work-terminal {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.work-terminal .seg-btn.is-active {
+  cursor: pointer;
+  pointer-events: auto;
+}
 .seg-btn.is-active[data-work='ignored'] {
   color: var(--text-2);
   background: var(--surface-inset);
@@ -1159,6 +1175,76 @@ a.list-item:hover .item-go,
     text-align: center;
     justify-content: center;
   }
+}
+
+/* 处理完成弹层 */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-4);
+  background: rgba(15, 23, 42, 0.42);
+  backdrop-filter: blur(2px);
+}
+.modal-card {
+  width: min(440px, 100%);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-soft);
+  box-shadow: var(--shadow-lg, 0 18px 40px rgba(15, 23, 42, 0.18));
+  padding: var(--space-4) var(--space-4) var(--space-3);
+}
+.modal-title {
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-lg, 1.05rem);
+  font-weight: 650;
+  color: var(--text);
+}
+.modal-lead {
+  margin: 0 0 var(--space-3);
+}
+.modal-card .field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: var(--space-3);
+}
+.modal-card .field-label {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text-2);
+}
+.modal-card textarea.input {
+  width: 100%;
+  resize: vertical;
+  min-height: 56px;
+  font: inherit;
+  font-size: var(--text-sm);
+  line-height: 1.45;
+  padding: 8px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  background: var(--surface-inset, var(--surface-2));
+  color: var(--text);
+}
+.modal-card textarea.input:focus {
+  outline: none;
+  box-shadow: var(--focus);
+  border-color: var(--accent, #2563eb);
+}
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border);
+}
+.panel-resolution .kv .v {
+  white-space: pre-wrap;
 }
 
 .hint {

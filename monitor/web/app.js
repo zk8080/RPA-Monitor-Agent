@@ -30,6 +30,84 @@
     toastTimer = setTimeout(() => toastEl.classList.remove('show'), ms);
   }
 
+  /**
+   * 「处理完成」引导填写弹层：原因/方案均可空
+   * @param {{ rootCause?: string, solution?: string }} [preset]
+   * @returns {Promise<{ ok: boolean, rootCause?: string, solution?: string }>}
+   */
+  function openResolveDialog(preset = {}) {
+    return new Promise((resolve) => {
+      const existing = document.getElementById('resolve-dialog');
+      if (existing) existing.remove();
+
+      const overlay = document.createElement('div');
+      overlay.id = 'resolve-dialog';
+      overlay.className = 'modal-overlay';
+      overlay.setAttribute('role', 'dialog');
+      overlay.setAttribute('aria-modal', 'true');
+      overlay.setAttribute('aria-labelledby', 'resolve-dialog-title');
+      overlay.innerHTML = `
+        <div class="modal-card">
+          <h2 id="resolve-dialog-title" class="modal-title">处理完成</h2>
+          <p class="hint modal-lead">将移出优先处理列表。同指纹再次失败会拉回待处理。原因与方案<strong>选填</strong>，建议随手记一句方便日后对照。</p>
+          <label class="field">
+            <span class="field-label">问题原因 <span class="faint">（选填）</span></span>
+            <textarea id="resolve-root" class="input" rows="2" placeholder="例：页面改版导致元素找不到 / 上游 Excel 缺列">${esc(
+              preset.rootCause || '',
+            )}</textarea>
+          </label>
+          <label class="field">
+            <span class="field-label">处理方案 <span class="faint">（选填）</span></span>
+            <textarea id="resolve-sol" class="input" rows="2" placeholder="例：已更新选择器并重跑 / 已联系业务补数据">${esc(
+              preset.solution || '',
+            )}</textarea>
+          </label>
+          <div class="modal-actions">
+            <button type="button" class="btn ghost" data-resolve-cancel>取消</button>
+            <button type="button" class="btn primary" data-resolve-ok>确认完成</button>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(overlay);
+
+      const rootEl = overlay.querySelector('#resolve-root');
+      const solEl = overlay.querySelector('#resolve-sol');
+      const finish = (result) => {
+        document.removeEventListener('keydown', onKey);
+        overlay.remove();
+        resolve(result);
+      };
+      const onKey = (e) => {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          finish({ ok: false });
+        }
+      };
+      document.addEventListener('keydown', onKey);
+
+      overlay.addEventListener('click', (e) => {
+        if (e.target === overlay) finish({ ok: false });
+      });
+      overlay.querySelector('[data-resolve-cancel]')?.addEventListener('click', () => {
+        finish({ ok: false });
+      });
+      overlay.querySelector('[data-resolve-ok]')?.addEventListener('click', () => {
+        finish({
+          ok: true,
+          rootCause: rootEl ? rootEl.value : '',
+          solution: solEl ? solEl.value : '',
+        });
+      });
+
+      // 聚焦第一个空框，引导填写
+      requestAnimationFrame(() => {
+        if (rootEl && !String(rootEl.value || '').trim()) rootEl.focus();
+        else if (solEl) solEl.focus();
+        else rootEl?.focus();
+      });
+    });
+  }
+
   function esc(s) {
     return String(s ?? '')
       .replace(/&/g, '&amp;')
@@ -537,20 +615,41 @@
       f.failureKind === 'soft'
         ? '<span class="badge warn" title="成功抽检：任务状态成功，但日志末尾有错误">抽检命中</span>'
         : '';
+    const ws = f.workStatus || 'open';
+    const workBadge =
+      ws === 'resolved'
+        ? '<span class="badge ok" title="处理完成">已处理</span>'
+        : ws === 'snoozed'
+          ? '<span class="badge warn" title="稍后处理">稍后</span>'
+          : ws === 'ignored'
+            ? '<span class="badge" title="不再提醒">不提醒</span>'
+            : '';
+    // 已处理：不再强调未诊断 / 次数（历史仍可在详情看）
+    const showDiag = ws !== 'resolved';
+    const showOcc = ws !== 'resolved' && f.occurrenceCount;
     return `<div class="item-side">
       <div class="badges">
+        ${workBadge}
         ${soft}
-        ${f.diagnosed ? '<span class="badge ok">已诊断</span>' : '<span class="badge warn">未诊断</span>'}
-        ${bucketLabel ? `<span class="${bucketCls}" title="技术分流">${esc(bucketLabel)}</span>` : ''}
-        ${fixLabel ? `<span class="badge">${esc(fixLabel)}</span>` : ''}
         ${
-          canPreview
-            ? '<span class="badge ok">可预览修</span>'
-            : f.fixability === 'manual'
-              ? '<span class="badge">需人工</span>'
-              : ''
+          showDiag
+            ? f.diagnosed
+              ? '<span class="badge ok">已诊断</span>'
+              : '<span class="badge warn">未诊断</span>'
+            : ''
         }
-        ${f.occurrenceCount ? `<span class="badge">${esc(f.occurrenceCount)} 次</span>` : ''}
+        ${bucketLabel ? `<span class="${bucketCls}" title="技术分流">${esc(bucketLabel)}</span>` : ''}
+        ${fixLabel && ws !== 'resolved' ? `<span class="badge">${esc(fixLabel)}</span>` : ''}
+        ${
+          ws === 'resolved'
+            ? ''
+            : canPreview
+              ? '<span class="badge ok">可预览修</span>'
+              : f.fixability === 'manual'
+                ? '<span class="badge">需人工</span>'
+                : ''
+        }
+        ${showOcc ? `<span class="badge">${esc(f.occurrenceCount)} 次</span>` : ''}
       </div>
     </div>`;
   }
@@ -3024,7 +3123,7 @@
     const priorityPanel = `
       <div class="panel mb panel-priority">
         <h2>优先处理 <span class="meta" id="priority-count">${countInPriority(priorityFilter)}</span><span class="meta faint"> / ${priority.length}</span></h2>
-        <p class="hint mb-sm">仅<strong>待处理(open)</strong>且失败${esc(windowHint)}的指纹；按未诊断 → 复发 → 跨应用 → 可预览修 → 高频排序，最多 10 条。稍后/不再提醒的不进本列表。待处理 ${esc(wsQ.open ?? '—')} · 稍后 ${esc(wsQ.snoozed ?? 0)} · 不提醒 ${esc(wsQ.ignored ?? 0)}${wsQ.ignoredStillFailing ? `（忽略后仍失败 ${wsQ.ignoredStillFailing}）` : ''}。</p>
+        <p class="hint mb-sm">仅<strong>待处理(open)</strong>且失败${esc(windowHint)}的指纹；按未诊断 → 复发 → 跨应用 → 可预览修 → 高频排序，最多 10 条。稍后/处理完成/不再提醒的不进本列表。待处理 ${esc(wsQ.open ?? '—')} · 稍后 ${esc(wsQ.snoozed ?? 0)} · 已完成 ${esc(wsQ.resolved ?? 0)} · 不提醒 ${esc(wsQ.ignored ?? 0)}${wsQ.ignoredStillFailing ? `（忽略后仍失败 ${wsQ.ignoredStillFailing}）` : ''}。</p>
         <div class="chip-row bucket-filters mb-sm" role="toolbar" aria-label="今日优先分流筛选">
           ${bucketChipDefs
             .map(
@@ -3337,7 +3436,7 @@
               <div class="badges">
                 ${
                   a.failureCount
-                    ? `<span class="badge danger">${esc(a.failureCount)} 失败</span>`
+                    ? `<span class="badge danger">${esc(a.failureCount)} 待处理</span>`
                     : ''
                 }
                 ${
@@ -3346,9 +3445,16 @@
                     : ''
                 }
                 ${
+                  a.resolvedCount && !a.failureCount
+                    ? `<span class="badge ok">${esc(a.resolvedCount)} 已处理</span>`
+                    : a.resolvedCount
+                      ? `<span class="badge">${esc(a.resolvedCount)} 已处理</span>`
+                      : ''
+                }
+                ${
                   a.remoteOnly
                     ? `<span class="badge">云端</span>`
-                    : !a.failureCount && a.flowCount
+                    : !a.failureCount && !a.resolvedCount && a.flowCount
                       ? `<span class="badge">${esc(a.flowCount)} 流程</span>`
                       : ''
                 }
@@ -3390,7 +3496,13 @@
 
     setHeader(
       detail.name || robotUuid,
-      `${detail.failureCount || 0} 失败 · ${detail.undiagnosedCount || 0} 未诊断`,
+      [
+        `${detail.failureCount || 0} 待处理`,
+        detail.undiagnosedCount ? `${detail.undiagnosedCount} 未诊断` : null,
+        detail.resolvedCount ? `${detail.resolvedCount} 已处理` : null,
+      ]
+        .filter(Boolean)
+        .join(' · '),
     );
 
     content.innerHTML = `
@@ -3635,6 +3747,9 @@
     const workStatus = work.status || f.workStatus || 'open';
     const workLabel = work.label || '待处理';
     const snoozeDays = work.defaultSnoozeDays || 3;
+    const resolutionRoot = work.rootCause || '';
+    const resolutionSol = work.solution || '';
+    const hasResolutionNote = !!(resolutionRoot || resolutionSol);
 
     const hasDiagText = !!(d.rootCause || k.rootCause || d.suggestion || k.solution);
     let includeDiagnose = false;
@@ -3667,7 +3782,9 @@
         ? 'badge'
         : workStatus === 'snoozed'
           ? 'badge warn'
-          : 'badge ok';
+          : workStatus === 'resolved'
+            ? 'badge ok'
+            : 'badge ok';
 
     content.innerHTML = `
       <div class="crumb">
@@ -3754,6 +3871,10 @@
           <div class="k">指纹</div><div class="v mono">${esc(fingerprint)}</div>
           <div class="k">处置</div><div class="v">${esc(workLabel)}${
             work.snoozedUntil ? ` · 至 ${esc(relTime(work.snoozedUntil))}` : ''
+          }${
+            workStatus === 'resolved' && work.resolvedAt
+              ? ` · ${esc(relTime(work.resolvedAt))}`
+              : ''
           }</div>
           <div class="k">分流</div><div class="v">${esc(
             (data.bucket && data.bucket.label) || '—',
@@ -3780,7 +3901,30 @@
           </div>
           <div class="finding-toolbar-status">
             <span class="finding-toolbar-label" title="只影响优先处理列表，不删 queue、不改代码">处置</span>
-            <div class="seg" role="group" aria-label="优先列表处置">
+            ${
+              workStatus === 'resolved'
+                ? `<div class="work-terminal" role="group" aria-label="处理完成（终态）">
+              <span class="seg-btn is-active" data-work="resolved" data-fp="${esc(
+                fingerprint,
+              )}" aria-pressed="true" title="终态：可点此补充原因/方案">处理完成</span>
+              <button
+                type="button"
+                class="btn sm ghost"
+                data-work="resolved"
+                data-fp="${esc(fingerprint)}"
+                data-resolve-edit="1"
+                title="补充或修改原因/方案"
+              >补充说明</button>
+              <button
+                type="button"
+                class="btn sm ghost"
+                data-work="open"
+                data-fp="${esc(fingerprint)}"
+                data-reopen="1"
+                title="误标时可恢复；同指纹新失败也会自动拉回"
+              >恢复待处理</button>
+            </div>`
+                : `<div class="seg" role="group" aria-label="优先列表处置">
               <button
                 type="button"
                 class="seg-btn${workStatus === 'open' ? ' is-active' : ''}"
@@ -3799,16 +3943,46 @@
               >稍后 ${esc(snoozeDays)} 天</button>
               <button
                 type="button"
+                class="seg-btn"
+                data-work="resolved"
+                data-fp="${esc(fingerprint)}"
+                aria-pressed="false"
+                title="标记已处理（终态）；可记原因/方案。同指纹新失败会拉回待处理"
+              >处理完成</button>
+              <button
+                type="button"
                 class="seg-btn${workStatus === 'ignored' ? ' is-active' : ''}"
                 data-work="ignored"
                 data-fp="${esc(fingerprint)}"
                 aria-pressed="${workStatus === 'ignored' ? 'true' : 'false'}"
                 title="不再进优先列表；新失败默认不拉回（修复复发除外）"
               >不再提醒</button>
-            </div>
+            </div>`
+            }
           </div>
         </div>
       </div>
+
+      ${
+        hasResolutionNote
+          ? `<div class="panel mt panel-resolution">
+          <h2>处理说明 ${
+            workStatus === 'resolved'
+              ? '<span class="meta">已完成</span>'
+              : '<span class="meta faint">历史</span>'
+          }</h2>
+          <div class="kv">
+            <div class="k">问题原因</div><div class="v">${esc(resolutionRoot || '—')}</div>
+            <div class="k">处理方案</div><div class="v">${esc(resolutionSol || '—')}</div>
+          </div>
+          ${
+            work.resolvedAt
+              ? `<p class="hint mt">记录于 ${esc(relTime(work.resolvedAt))}</p>`
+              : ''
+          }
+        </div>`
+          : ''
+      }
 
       ${renderGuidanceBlock(g)}
 
@@ -3884,46 +4058,98 @@
 
     content.querySelectorAll('[data-work]').forEach((btn) => {
       btn.addEventListener('click', async () => {
+        // 终态徽章（span）也可点开补充说明
+        if (btn.tagName === 'SPAN' && btn.getAttribute('data-work') !== 'resolved') return;
+
         const st = btn.getAttribute('data-work');
         const fp = btn.getAttribute('data-fp') || fingerprint;
         if (!st || !fp) return;
-        // 当前态已选中：不再重复提交
-        if (btn.classList.contains('is-active') || btn.getAttribute('aria-pressed') === 'true') {
+
+        // 已完成终态：禁止走旧 segment 改到 snoozed/ignored（UI 已隐藏；双保险）
+        if (workStatus === 'resolved' && st !== 'resolved' && st !== 'open') {
+          toast('处理完成是终态，不能改为稍后/不再提醒');
           return;
         }
-        const group = btn.closest('.seg') || content;
-        const siblings = group.querySelectorAll('[data-work]');
+
+        const alreadyActive =
+          btn.classList.contains('is-active') || btn.getAttribute('aria-pressed') === 'true';
+        const isEditResolved =
+          st === 'resolved' &&
+          (workStatus === 'resolved' ||
+            btn.getAttribute('data-resolve-edit') === '1' ||
+            alreadyActive);
+        // 非终态：已选中 open/snoozed/ignored 不重复提交
+        if (alreadyActive && st !== 'resolved' && btn.getAttribute('data-reopen') !== '1') return;
+
+        const group =
+          btn.closest('.seg') || btn.closest('.work-terminal') || content;
+        const siblings = group.querySelectorAll('button[data-work], [data-work].seg-btn');
+
+        let body = {
+          status: st,
+          snoozeDays: st === 'snoozed' ? snoozeDays : undefined,
+        };
+
+        if (st === 'resolved') {
+          const form = await openResolveDialog({
+            rootCause: resolutionRoot,
+            solution: resolutionSol,
+          });
+          if (!form.ok) return;
+          body = {
+            status: 'resolved',
+            rootCause: form.rootCause,
+            solution: form.solution,
+          };
+        }
+
+        if (st === 'open' && workStatus === 'resolved') {
+          // 恢复待处理：无需弹层
+        }
+
         siblings.forEach((b) => {
-          b.disabled = true;
+          if (b.tagName === 'BUTTON') b.disabled = true;
         });
         try {
           const r = await api(`/api/findings/${encodeURIComponent(fp)}/work-status`, {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({
-              status: st,
-              snoozeDays: st === 'snoozed' ? snoozeDays : undefined,
-            }),
+            body: JSON.stringify(body),
           });
           if (r.ok) {
-            toast(
-              st === 'snoozed'
-                ? `已稍后处理 ${snoozeDays} 天`
-                : st === 'ignored'
-                  ? '已不再提醒（不进优先列表）'
-                  : '已恢复待处理',
-            );
+            if (st === 'snoozed') {
+              toast(`已稍后处理 ${snoozeDays} 天`);
+            } else if (st === 'ignored') {
+              toast('已不再提醒（不进优先列表）');
+            } else if (st === 'resolved') {
+              const filled = !!(
+                String(body.rootCause || '').trim() || String(body.solution || '').trim()
+              );
+              toast(
+                isEditResolved
+                  ? filled
+                    ? '处理说明已更新'
+                    : '仍为处理完成（未记原因）'
+                  : filled
+                    ? '已标为处理完成'
+                    : '已标为处理完成（未记原因，可点「补充说明」）',
+              );
+            } else if (st === 'open' && workStatus === 'resolved') {
+              toast('已恢复待处理');
+            } else {
+              toast('已恢复待处理');
+            }
             await renderFinding(fp);
           } else {
             toast(r.message || r.code || '设置失败');
             siblings.forEach((b) => {
-              b.disabled = false;
+              if (b.tagName === 'BUTTON') b.disabled = false;
             });
           }
         } catch (e) {
           toast(e.message || '设置失败');
           siblings.forEach((b) => {
-            b.disabled = false;
+            if (b.tagName === 'BUTTON') b.disabled = false;
           });
         }
       });

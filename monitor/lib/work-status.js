@@ -1,11 +1,12 @@
 /**
  * Queue 人工处置态（workStatus）
  *
- * 状态：open | snoozed | ignored
+ * 状态：open | snoozed | ignored | resolved
  * 仅影响「优先处理」待办面；不删 queue、默认不改全量统计。
  *
  * 新失败 = 同 fingerprint 出现新的 jobUuid。
  * - snoozed + 新 job → 回 open
+ * - resolved + 新 job → 回 open（处理完成但复发）
  * - ignored + 新 job → 保持 ignored（只更新失败统计）
  * - regressed / 验证复发 → 强制 open
  * - 无新 job 的 poll → 不改 workStatus
@@ -16,23 +17,31 @@ const WORK_STATUSES = Object.freeze({
   open: 'open',
   snoozed: 'snoozed',
   ignored: 'ignored',
+  resolved: 'resolved',
 });
 
 const WORK_STATUS_LABELS = Object.freeze({
   open: '待处理',
   snoozed: '稍后处理',
   ignored: '不再提醒',
+  resolved: '处理完成',
 });
 
 const DEFAULT_SNOOZE_DAYS = 3;
 
 /**
  * @param {string|null|undefined} status
- * @returns {'open'|'snoozed'|'ignored'}
+ * @returns {'open'|'snoozed'|'ignored'|'resolved'}
  */
 function normalizeWorkStatus(status) {
   const s = String(status || '').trim().toLowerCase();
-  if (s === WORK_STATUSES.snoozed || s === WORK_STATUSES.ignored) return s;
+  if (
+    s === WORK_STATUSES.snoozed ||
+    s === WORK_STATUSES.ignored ||
+    s === WORK_STATUSES.resolved
+  ) {
+    return s;
+  }
   return WORK_STATUSES.open;
 }
 
@@ -50,6 +59,30 @@ function isSnoozeActive(untilIso, now = new Date()) {
 }
 
 /**
+ * 规范化人工处理说明（原因 / 方案）
+ * @param {unknown} v
+ * @param {number} [maxLen]
+ */
+function normalizeResolutionText(v, maxLen = 2000) {
+  if (v == null) return '';
+  const s = String(v).trim();
+  if (!s) return '';
+  return s.length > maxLen ? s.slice(0, maxLen) : s;
+}
+
+/**
+ * 从条目或 opts 取处理说明字段
+ * @param {object} [item]
+ */
+function pickResolutionFields(item = {}) {
+  return {
+    resolutionRootCause: normalizeResolutionText(item.resolutionRootCause),
+    resolutionSolution: normalizeResolutionText(item.resolutionSolution),
+    resolvedAt: item.resolvedAt || null,
+  };
+}
+
+/**
  * 有效状态（读路径）：snoozed 过期 → open
  * @param {object} item queue 条目
  * @param {string|Date} [now]
@@ -60,6 +93,9 @@ function isSnoozeActive(untilIso, now = new Date()) {
  *   effectiveOpen: boolean,
  *   snoozeExpired: boolean,
  *   ignoredStillFailing: boolean,
+ *   resolutionRootCause: string,
+ *   resolutionSolution: string,
+ *   resolvedAt: string|null,
  * }}
  */
 function resolveEffectiveWorkStatus(item = {}, now = new Date()) {
@@ -76,6 +112,8 @@ function resolveEffectiveWorkStatus(item = {}, now = new Date()) {
     }
   }
 
+  const res = pickResolutionFields(item);
+
   return {
     workStatus,
     workStatusLabel: WORK_STATUS_LABELS[workStatus] || WORK_STATUS_LABELS.open,
@@ -87,6 +125,9 @@ function resolveEffectiveWorkStatus(item = {}, now = new Date()) {
     snoozeExpired,
     ignoredStillFailing:
       workStatus === WORK_STATUSES.ignored && item.ignoredStillFailing === true,
+    resolutionRootCause: res.resolutionRootCause,
+    resolutionSolution: res.resolutionSolution,
+    resolvedAt: res.resolvedAt,
   };
 }
 
@@ -134,8 +175,13 @@ function mergeWorkStatusOnUpsert(existing, ctx = {}) {
       workStatusReason: null,
       reopenedBy: null,
       ignoredStillFailing: false,
+      resolutionRootCause: '',
+      resolutionSolution: '',
+      resolvedAt: null,
     };
   }
+
+  const prevRes = pickResolutionFields(existing);
 
   // 先消化过期 snooze（仅字段，不强制写 reason）
   let status = normalizeWorkStatus(existing.workStatus);
@@ -159,11 +205,15 @@ function mergeWorkStatusOnUpsert(existing, ctx = {}) {
       workStatusReason: 'regressed',
       reopenedBy: 'regressed',
       ignoredStillFailing: false,
+      // 保留历史处理说明，便于对照「以为修好了」
+      resolutionRootCause: prevRes.resolutionRootCause,
+      resolutionSolution: prevRes.resolutionSolution,
+      resolvedAt: prevRes.resolvedAt,
     };
   }
 
   if (isNewJob) {
-    if (status === WORK_STATUSES.snoozed) {
+    if (status === WORK_STATUSES.snoozed || status === WORK_STATUSES.resolved) {
       status = WORK_STATUSES.open;
       snoozedUntil = null;
       reopenedBy = 'new_job';
@@ -175,7 +225,7 @@ function mergeWorkStatusOnUpsert(existing, ctx = {}) {
       ignoredStillFailing = true;
       // 不改 workStatusUpdatedAt / reopenedBy
     } else {
-      // open：保持；清掉过期 reopen 标记可选
+      // open：保持
       ignoredStillFailing = false;
     }
   }
@@ -187,19 +237,76 @@ function mergeWorkStatusOnUpsert(existing, ctx = {}) {
     workStatusReason,
     reopenedBy,
     ignoredStillFailing,
+    resolutionRootCause: prevRes.resolutionRootCause,
+    resolutionSolution: prevRes.resolutionSolution,
+    resolvedAt: prevRes.resolvedAt,
   };
+}
+
+/**
+ * 人工状态迁移是否允许。
+ * resolved 为人工终态：仅允许保持 resolved（补说明）或 open（恢复待处理）；
+ * 不可再改为 snoozed / ignored。新 job / regressed 的自动拉回走 merge，不经此校验。
+ *
+ * @param {string|null|undefined} fromStatus
+ * @param {string|null|undefined} toStatus
+ * @returns {{ ok: true } | { ok: false, code: string, message: string }}
+ */
+function assertManualTransition(fromStatus, toStatus) {
+  const from = normalizeWorkStatus(fromStatus);
+  const to = normalizeWorkStatus(toStatus);
+  if (
+    from === WORK_STATUSES.resolved &&
+    to !== WORK_STATUSES.resolved &&
+    to !== WORK_STATUSES.open
+  ) {
+    return {
+      ok: false,
+      code: 'terminal_resolved',
+      message:
+        '处理完成是终态，不能改为稍后/不再提醒。可点「恢复待处理」，或等同指纹新失败自动拉回。',
+    };
+  }
+  return { ok: true };
 }
 
 /**
  * 人工设置 workStatus
  * @param {object} item 现有 queue
- * @param {'open'|'snoozed'|'ignored'} status
- * @param {{ snoozeDays?: number, snoozedUntil?: string, reason?: string, now?: string }} [opts]
+ * @param {'open'|'snoozed'|'ignored'|'resolved'} status
+ * @param {{
+ *   snoozeDays?: number,
+ *   snoozedUntil?: string,
+ *   reason?: string,
+ *   now?: string,
+ *   rootCause?: string,
+ *   solution?: string,
+ *   resolutionRootCause?: string,
+ *   resolutionSolution?: string,
+ * }} [opts]
  */
 function applyManualWorkStatus(item, status, opts = {}) {
   const now = opts.now || new Date().toISOString();
   const nextStatus = normalizeWorkStatus(status);
   const base = { ...(item || {}) };
+  const prev = normalizeWorkStatus(base.workStatus);
+  const prevRes = pickResolutionFields(base);
+
+  // 入参优先 rootCause/solution；未传则保留旧说明
+  const hasRoot =
+    opts.rootCause != null || opts.resolutionRootCause != null;
+  const hasSol =
+    opts.solution != null || opts.resolutionSolution != null;
+  const nextRoot = hasRoot
+    ? normalizeResolutionText(
+        opts.rootCause != null ? opts.rootCause : opts.resolutionRootCause,
+      )
+    : prevRes.resolutionRootCause;
+  const nextSol = hasSol
+    ? normalizeResolutionText(
+        opts.solution != null ? opts.solution : opts.resolutionSolution,
+      )
+    : prevRes.resolutionSolution;
 
   if (nextStatus === WORK_STATUSES.snoozed) {
     let until = opts.snoozedUntil || null;
@@ -218,6 +325,9 @@ function applyManualWorkStatus(item, status, opts = {}) {
       workStatusReason: opts.reason || 'manual_snooze',
       reopenedBy: null,
       ignoredStillFailing: false,
+      resolutionRootCause: nextRoot,
+      resolutionSolution: nextSol,
+      resolvedAt: prevRes.resolvedAt,
     };
   }
 
@@ -230,18 +340,42 @@ function applyManualWorkStatus(item, status, opts = {}) {
       workStatusReason: opts.reason || 'manual_ignore',
       reopenedBy: null,
       ignoredStillFailing: false,
+      resolutionRootCause: nextRoot,
+      resolutionSolution: nextSol,
+      resolvedAt: prevRes.resolvedAt,
     };
   }
 
-  // open
+  if (nextStatus === WORK_STATUSES.resolved) {
+    // 处理完成：写说明（可空）；新失败会拉回 open
+    return {
+      ...base,
+      workStatus: WORK_STATUSES.resolved,
+      snoozedUntil: null,
+      workStatusUpdatedAt: now,
+      workStatusReason: opts.reason || 'manual_resolve',
+      reopenedBy: null,
+      ignoredStillFailing: false,
+      resolutionRootCause: nextRoot,
+      resolutionSolution: nextSol,
+      resolvedAt: now,
+    };
+  }
+
+  // open（从 resolved 恢复时记 manual reopen）
+  const fromResolved = prev === WORK_STATUSES.resolved;
   return {
     ...base,
     workStatus: WORK_STATUSES.open,
     snoozedUntil: null,
     workStatusUpdatedAt: now,
-    workStatusReason: opts.reason || 'manual_open',
-    reopenedBy: null,
+    workStatusReason:
+      opts.reason || (fromResolved ? 'manual_reopen' : 'manual_open'),
+    reopenedBy: fromResolved ? 'manual' : null,
     ignoredStillFailing: false,
+    resolutionRootCause: nextRoot,
+    resolutionSolution: nextSol,
+    resolvedAt: prevRes.resolvedAt,
   };
 }
 
@@ -265,9 +399,12 @@ module.exports = {
   DEFAULT_SNOOZE_DAYS,
   normalizeWorkStatus,
   isSnoozeActive,
+  normalizeResolutionText,
+  pickResolutionFields,
   resolveEffectiveWorkStatus,
   isPriorityEligible,
   mergeWorkStatusOnUpsert,
+  assertManualTransition,
   applyManualWorkStatus,
   forceOpenFields,
 };

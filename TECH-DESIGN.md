@@ -769,7 +769,7 @@ Poll：`POLL_LOOKBACK_HOURS` / `POLL_MAX_PAGES`。
 | **P1** | **S26** ✅ | 工作台配置 LLM | `data/settings.llm.json` + GET/PUT/test + 设置页；env > file > local.js | 脱敏 GET；热生效；diagnoseUseLlm；见 [PLAN-LLM-WEB-SETTINGS.md](PLAN-LLM-WEB-SETTINGS.md) |
 | **P1** | **S27a** ✅ | **Coding Agent 瘦身交接包** | `lib/handoff.js` + `/api/findings/:fp/handoff` + `/api/apps/:uuid/handoff`；详情「复制提示」；诊断 opt-in | 默认短（路径+现象）；不含日志/全量档案；Web 不 apply；`test_handoff.js` |
 | **P1** | **S27b** ✅ | **失败噪声分流 bucket** | `lib/bucket.js`：env_robot / schedule / **element** / code / data_config / unknown；UI 三档筛选 | 元素≠代码；code 仅 py/变量类；`test_bucket.js` |
-| **P1** | **S27d** ✅ | **queue 处置态 workStatus** | open / snoozed / ignored；新 job 唤醒规则；优先队列仅 open + 近 24h | 不删 queue；regressed 强制 open；`test_work_status.js` |
+| **P1** | **S27d** ✅ | **queue 处置态 workStatus** | open / snoozed / ignored / resolved；新 job 唤醒规则；优先队列仅 open + 近 24h；处理完成可选填原因/方案 | 不删 queue；regressed 强制 open；`test_work_status.js` |
 | **P2** | **S10c** ⏸ | 分诊标签 `fixOwner` | business / developer / known | **暂缓**：业务侧尚无明确归属划分；规则易误导，待组织分工清晰后再做 |
 | **P2** | **S21** | 服务器流程源码策略 | 无 ShadowBot：共享盘 / app-map / 降级 | DEPLOY 专节 + 配置（当前无服务器需求可后置） |
 | **P2** | **S22** ⏸ | develop skill 骨架 | `agent.js develop` 路由 + playbook 占位 | **暂缓**：当前收益低于「工作台 → 复制路径 → Coding Agent」；真要生成流程再立项 |
@@ -856,7 +856,7 @@ maintain: {
 
 ### 15.3c S27d 处置态 workStatus（已实现）
 
-**状态：** `open`（默认）| `snoozed` | `ignored`  
+**状态：** `open`（默认）| `snoozed` | `ignored` | `resolved`（处理完成）  
 **影响面：** 仅「优先处理」列表；**不**改全量 depth/bucket 统计；**不** apply py。
 
 **新失败 = 同 fingerprint 新 `jobUuid`：**
@@ -865,14 +865,18 @@ maintain: {
 |------|--------|------|
 | open | 是 | 保持 open |
 | snoozed | 是 | **回 open**，`reopenedBy=new_job` |
+| resolved | 是 | **回 open**，`reopenedBy=new_job`（保留历史处理说明） |
 | ignored | 是 | **保持 ignored**，`ignoredStillFailing=true` |
 | 任意 | 否（同 job 再 poll） | 不改 workStatus |
 | 任意 | regressed | **强制 open** |
 
-**优先队列：** 有效 open（snoozed 过期算 open）且 `lastFailureAt` 在 `workbench.priorityRecentDays`（默认 **1=滚动 24h**，0=不限）内。  
+**处理完成：** 工作台弹层引导填写「问题原因 / 处理方案」（**选填**）；写入 queue `resolutionRootCause` / `resolutionSolution` / `resolvedAt`。不强制写 KB（后置）。  
+**终态：** `resolved` 不可再人工改为 snoozed/ignored；仅可「补充说明」或「恢复待处理」(→ open)。新 job / regressed 仍自动拉回 open。  
 
-**API：** `POST /api/findings/:fp/work-status` body `{ status, snoozeDays? }`  
-**实现：** `lib/work-status.js` + `memory.upsert` 合并 + 详情页按钮。
+**优先队列：** 有效 open（snoozed 过期算 open；resolved/ignored 不进）且 `lastFailureAt` 在 `workbench.priorityRecentDays`（默认 **1=滚动 24h**，0=不限）内。  
+
+**API：** `POST /api/findings/:fp/work-status` body `{ status, snoozeDays?, rootCause?, solution? }`  
+**实现：** `lib/work-status.js` + `memory.upsert` 合并 + 详情页按钮 / 弹层。
 
 ### 15.4 明确不做（除非单独立项）
 

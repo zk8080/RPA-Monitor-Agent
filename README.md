@@ -115,7 +115,7 @@ npm start
 | **S26** 工作台配置 LLM | ✅ `data/settings.llm.json` + 设置页；env 优先 |
 | **S27a** Coding Agent 瘦身交接包 | ✅ `lib/handoff.js`；默认路径+现象；诊断 opt-in |
 | **S27b** 失败噪声分流 | ✅ `lib/bucket.js`；可开发 vs 环境/调度筛选 |
-| **S27d** 处置态 workStatus | ✅ open/snoozed/ignored；优先列表仅 open；新 job 唤醒规则 |
+| **S27d** 处置态 workStatus | ✅ open/snoozed/ignored/resolved；优先列表仅 open；处理完成可选填原因/方案；新 job 唤醒规则 |
 | S10c+ 后续 | 见下表 |
 | service 自动 apply | **永不默认** |
 

@@ -43,6 +43,39 @@ assert.strictEqual(agg.get('r1').undiagnosedCount, 1);
 assert.strictEqual(agg.get('r1').lastSeen, '2026-07-12T11:00:00.000Z');
 assert.strictEqual(agg.get('r2').failureCount, 1);
 
+// 已处理 / 不提醒 不计入「待处理」failureCount
+const aggWs = aggregateFailuresByRobot([
+  {
+    robotUuid: 'rw',
+    diagnosed: false,
+    workStatus: 'open',
+    lastSeen: '2026-07-12T10:00:00.000Z',
+  },
+  {
+    robotUuid: 'rw',
+    diagnosed: false,
+    workStatus: 'resolved',
+    lastSeen: '2026-07-12T11:00:00.000Z',
+  },
+  {
+    robotUuid: 'rw',
+    diagnosed: false,
+    workStatus: 'ignored',
+    lastSeen: '2026-07-12T12:00:00.000Z',
+  },
+  {
+    robotUuid: 'rw',
+    diagnosed: true,
+    workStatus: 'snoozed',
+    snoozedUntil: '2099-01-01T00:00:00.000Z',
+    lastSeen: '2026-07-12T13:00:00.000Z',
+  },
+]);
+assert.strictEqual(aggWs.get('rw').failureCount, 1);
+assert.strictEqual(aggWs.get('rw').undiagnosedCount, 1);
+assert.strictEqual(aggWs.get('rw').resolvedCount, 1);
+assert.strictEqual(aggWs.get('rw').items.length, 4);
+
 // --- priority queue ranking ---
 const pq = buildPriorityQueue(
   [

@@ -49,6 +49,28 @@ function testMergeRules() {
   assert.strictEqual(ig.workStatus, 'ignored');
   assert.strictEqual(ig.ignoredStillFailing, true);
 
+  // resolved + 新 job → 回 open（复发）
+  const rs = workStatus.mergeWorkStatusOnUpsert(
+    {
+      workStatus: 'resolved',
+      resolutionRootCause: '元素找不到',
+      resolutionSolution: '已改选择器',
+      resolvedAt: '2026-07-13T00:00:00.000Z',
+    },
+    { isNewJob: true, now },
+  );
+  assert.strictEqual(rs.workStatus, 'open');
+  assert.strictEqual(rs.reopenedBy, 'new_job');
+  assert.strictEqual(rs.resolutionRootCause, '元素找不到');
+  assert.strictEqual(rs.resolutionSolution, '已改选择器');
+
+  // resolved + 非新 job → 保持 resolved
+  const rsKeep = workStatus.mergeWorkStatusOnUpsert(
+    { workStatus: 'resolved', resolutionRootCause: 'x' },
+    { isNewJob: false, now },
+  );
+  assert.strictEqual(rsKeep.workStatus, 'resolved');
+
   // forceOpen（regressed）
   const fo = workStatus.mergeWorkStatusOnUpsert(
     { workStatus: 'ignored' },
@@ -68,6 +90,16 @@ function testMergeRules() {
   assert.strictEqual(expired.workStatus, 'open');
   assert.strictEqual(expired.snoozeExpired, true);
   assert.strictEqual(expired.effectiveOpen, true);
+
+  // resolved 读路径：不进优先
+  const resEff = workStatus.resolveEffectiveWorkStatus(
+    { workStatus: 'resolved', resolutionRootCause: 'a' },
+    now,
+  );
+  assert.strictEqual(resEff.workStatus, 'resolved');
+  assert.strictEqual(resEff.effectiveOpen, false);
+  assert.strictEqual(resEff.workStatusLabel, '处理完成');
+  assert.strictEqual(resEff.resolutionRootCause, 'a');
 
   console.log('ok merge rules');
 }
@@ -116,6 +148,39 @@ function testUpsertAndManual() {
     workStatus.isPriorityEligible(still, { recentDays: 1 }),
     false,
   );
+
+  // resolved：可空说明；新 job 拉回
+  const done = memory.setQueueWorkStatus(dir, fp, 'resolved', {
+    rootCause: '上游缺列',
+    solution: '业务补数据后重跑',
+  });
+  assert.strictEqual(done.workStatus, 'resolved');
+  assert.strictEqual(done.resolutionRootCause, '上游缺列');
+  assert.strictEqual(done.resolutionSolution, '业务补数据后重跑');
+  assert.ok(done.resolvedAt);
+  assert.strictEqual(
+    workStatus.isPriorityEligible(done, {
+      now: new Date('2026-07-14T15:00:00.000Z'),
+      recentDays: 1,
+    }),
+    false,
+  );
+  const doneWoke = memory.upsertQueueItem(dir, base, {
+    jobUuid: 'j4',
+    failureAt: '2026-07-14T13:00:00',
+  });
+  assert.strictEqual(doneWoke.workStatus, 'open');
+  assert.strictEqual(doneWoke.reopenedBy, 'new_job');
+  // 历史说明保留
+  assert.strictEqual(doneWoke.resolutionRootCause, '上游缺列');
+
+  // 空说明也可 resolved
+  const emptyNote = memory.setQueueWorkStatus(dir, fp, 'resolved', {
+    rootCause: '',
+    solution: '',
+  });
+  assert.strictEqual(emptyNote.workStatus, 'resolved');
+  assert.strictEqual(emptyNote.resolutionRootCause, '');
 
   memory.setQueueWorkStatus(dir, fp, 'open');
   const openItem = memory.loadQueueItem(dir, fp);
@@ -168,6 +233,60 @@ function testWorkbenchApi() {
   const detail = workbench.getFindingDetail(fp, cfg);
   assert.strictEqual(detail.ok, true);
   assert.strictEqual(detail.work.status, 'snoozed');
+
+  const r2 = workbench.setFindingWorkStatus(fp, cfg, {
+    status: 'resolved',
+    rootCause: '超时',
+    solution: '调大 wait',
+  });
+  assert.strictEqual(r2.ok, true);
+  assert.strictEqual(r2.workStatus, 'resolved');
+  assert.strictEqual(r2.rootCause, '超时');
+  assert.strictEqual(r2.solution, '调大 wait');
+
+  const detail2 = workbench.getFindingDetail(fp, cfg);
+  assert.strictEqual(detail2.ok, true);
+  assert.strictEqual(detail2.work.status, 'resolved');
+  assert.strictEqual(detail2.work.label, '处理完成');
+  assert.strictEqual(detail2.work.rootCause, '超时');
+  assert.strictEqual(detail2.work.solution, '调大 wait');
+
+  // 可空说明
+  const r3 = workbench.setFindingWorkStatus(fp, cfg, { status: 'resolved' });
+  assert.strictEqual(r3.ok, true);
+  assert.strictEqual(r3.workStatus, 'resolved');
+  assert.strictEqual(r3.rootCause, '');
+  assert.strictEqual(r3.solution, '');
+
+  // 终态：不可改为 snoozed / ignored
+  const blockSn = workbench.setFindingWorkStatus(fp, cfg, { status: 'snoozed' });
+  assert.strictEqual(blockSn.ok, false);
+  assert.strictEqual(blockSn.code, 'terminal_resolved');
+  const blockIg = workbench.setFindingWorkStatus(fp, cfg, { status: 'ignored' });
+  assert.strictEqual(blockIg.ok, false);
+  assert.strictEqual(blockIg.code, 'terminal_resolved');
+
+  // 终态：可补说明、可恢复待处理
+  const edit = workbench.setFindingWorkStatus(fp, cfg, {
+    status: 'resolved',
+    rootCause: '补一句',
+    solution: 'ok',
+  });
+  assert.strictEqual(edit.ok, true);
+  assert.strictEqual(edit.rootCause, '补一句');
+  const reopen = workbench.setFindingWorkStatus(fp, cfg, { status: 'open' });
+  assert.strictEqual(reopen.ok, true);
+  assert.strictEqual(reopen.workStatus, 'open');
+  assert.strictEqual(reopen.reopenedBy, 'manual');
+
+  // assertManualTransition 单元
+  assert.strictEqual(
+    workStatus.assertManualTransition('resolved', 'ignored').ok,
+    false,
+  );
+  assert.strictEqual(workStatus.assertManualTransition('resolved', 'open').ok, true);
+  assert.strictEqual(workStatus.assertManualTransition('resolved', 'resolved').ok, true);
+  assert.strictEqual(workStatus.assertManualTransition('open', 'ignored').ok, true);
 
   fs.rmSync(dir, { recursive: true, force: true });
   console.log('ok workbench api');

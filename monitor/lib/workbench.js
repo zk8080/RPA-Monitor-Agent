@@ -68,7 +68,7 @@ function listOpenAgents(cfg) {
  * @param {object[]} items
  * @returns {Map<string, {
  *   robotUuid, robotName, taskName, taskNames,
- *   failureCount, undiagnosedCount, lastSeen, items
+ *   failureCount（仅 open 待处理）, undiagnosedCount, resolvedCount, lastSeen, items
  * }>}
  */
 /** 展示用失败时间：优先 lastFailureAt（真实失败），兼容旧 queue 仅 lastSeen */
@@ -77,7 +77,16 @@ function failureTimeOf(it) {
   return it.lastFailureAt || it.lastSeen || it.firstFailureAt || it.firstSeen || null;
 }
 
-function aggregateFailuresByRobot(items) {
+/**
+ * 应用「N 失败」红标是否计入：仅待处理 open。
+ * resolved / ignored / snoozed 不撑红标。
+ */
+function countsTowardAppFailure(it, now = new Date()) {
+  const eff = workStatusLib.resolveEffectiveWorkStatus(it, now);
+  return eff.workStatus === 'open';
+}
+
+function aggregateFailuresByRobot(items, now = new Date()) {
   const map = new Map();
   for (const it of items || []) {
     const id = it.robotUuid || 'unknown';
@@ -92,13 +101,19 @@ function aggregateFailuresByRobot(items) {
         robotClientUuid: it.robotClientUuid || '',
         failureCount: 0,
         undiagnosedCount: 0,
+        resolvedCount: 0,
         lastSeen: null,
         items: [],
       };
       map.set(id, row);
     }
-    row.failureCount += 1;
-    if (!it.diagnosed) row.undiagnosedCount += 1;
+    const eff = workStatusLib.resolveEffectiveWorkStatus(it, now);
+    if (eff.workStatus === 'resolved') row.resolvedCount += 1;
+    // 红标「N 失败」= 仍待处理 open；已处理/稍后/不提醒不计入
+    if (countsTowardAppFailure(it, now)) {
+      row.failureCount += 1;
+      if (!it.diagnosed) row.undiagnosedCount += 1;
+    }
     if (!row.robotName && it.robotName) row.robotName = it.robotName;
     if (!row.robotClientName && it.robotClientName) {
       row.robotClientName = String(it.robotClientName).trim();
@@ -439,6 +454,7 @@ function buildOverview(cfg, state = {}) {
   let workOpen = 0;
   let workSnoozed = 0;
   let workIgnored = 0;
+  let workResolved = 0;
   let ignoredStillFailing = 0;
   const nowWs = new Date();
   for (const it of queueItems) {
@@ -447,7 +463,8 @@ function buildOverview(cfg, state = {}) {
     else if (eff.workStatus === 'ignored') {
       workIgnored += 1;
       if (eff.ignoredStillFailing) ignoredStillFailing += 1;
-    } else workOpen += 1;
+    } else if (eff.workStatus === 'resolved') workResolved += 1;
+    else workOpen += 1;
   }
 
   const startedAt = state.startedAt || Date.now();
@@ -481,6 +498,7 @@ function buildOverview(cfg, state = {}) {
         open: workOpen,
         snoozed: workSnoozed,
         ignored: workIgnored,
+        resolved: workResolved,
         ignoredStillFailing,
       },
       priorityRecentDays: wbCfg.priorityRecentDays,
@@ -613,6 +631,7 @@ function buildAppListRow(base, st, taskEntry) {
     remoteOnly: !(base && base.xbotDir),
     failureCount: st ? st.failureCount : 0,
     undiagnosedCount: st ? st.undiagnosedCount : 0,
+    resolvedCount: st ? st.resolvedCount || 0 : 0,
     lastFailureAt: st ? st.lastSeen : null,
     lastErrorType: lastItem ? lastItem.errorType || '' : '',
     lastFlowName: lastItem ? lastItem.flowName || '' : '',
@@ -717,9 +736,20 @@ function getAppDetail(robotUuid, cfg, opts = {}) {
   const st = bundle.queueStats.get(robotUuid);
 
   const limit = opts.failureLimit || 20;
+  const workRank = (it) => {
+    const s = workStatusLib.resolveEffectiveWorkStatus(it).workStatus;
+    if (s === 'open') return 0;
+    if (s === 'snoozed') return 1;
+    if (s === 'resolved') return 2;
+    return 3; // ignored
+  };
   const failures = (st ? st.items : [])
     .slice()
-    .sort((a, b) => String(b.lastSeen || '').localeCompare(String(a.lastSeen || '')))
+    .sort((a, b) => {
+      const wr = workRank(a) - workRank(b);
+      if (wr !== 0) return wr;
+      return String(failureTimeOf(b) || '').localeCompare(String(failureTimeOf(a) || ''));
+    })
     .slice(0, limit)
     .map((it) => enrichFailureItem(it, cfg));
 
@@ -774,6 +804,7 @@ function getAppDetail(robotUuid, cfg, opts = {}) {
     },
     failureCount: st ? st.failureCount : 0,
     undiagnosedCount: st ? st.undiagnosedCount : 0,
+    resolvedCount: st ? st.resolvedCount || 0 : 0,
     lastFailureAt: st ? st.lastSeen : null,
     failures,
     patches,
@@ -843,6 +874,9 @@ function enrichFailureItem(it, cfg) {
     snoozedUntil: ws.snoozedUntil,
     reopenedBy: ws.reopenedBy,
     ignoredStillFailing: ws.ignoredStillFailing,
+    resolutionRootCause: ws.resolutionRootCause || '',
+    resolutionSolution: ws.resolutionSolution || '',
+    resolvedAt: ws.resolvedAt || null,
   };
 }
 
@@ -909,6 +943,9 @@ function getFindingDetail(fingerprint, cfg) {
       reopenedBy: enriched.reopenedBy,
       ignoredStillFailing: enriched.ignoredStillFailing,
       defaultSnoozeDays: getWorkbenchConfig(cfg).defaultSnoozeDays,
+      rootCause: enriched.resolutionRootCause || '',
+      solution: enriched.resolutionSolution || '',
+      resolvedAt: enriched.resolvedAt || null,
     },
     // 附加字段：失败详情「复制路径 / Agent 提示」；旧客户端可忽略
     xbotDir,
@@ -948,28 +985,52 @@ function getFindingDetail(fingerprint, cfg) {
  * S27d：设置失败处置态（仅影响优先队列，不删 queue、不改 py）
  * @param {string} fingerprint
  * @param {object} cfg
- * @param {{ status: string, snoozeDays?: number, reason?: string }} body
+ * @param {{
+ *   status: string,
+ *   snoozeDays?: number,
+ *   reason?: string,
+ *   rootCause?: string,
+ *   solution?: string,
+ * }} body
  */
 function setFindingWorkStatus(fingerprint, cfg, body = {}) {
   if (!fingerprint) {
     return { ok: false, code: 'missing_fingerprint', message: '缺少 fingerprint' };
   }
   const raw = String(body.status || '').trim().toLowerCase();
-  if (!['open', 'snoozed', 'ignored'].includes(raw)) {
+  if (!['open', 'snoozed', 'ignored', 'resolved'].includes(raw)) {
     return {
       ok: false,
       code: 'invalid_status',
-      message: 'status 须为 open | snoozed | ignored',
+      message: 'status 须为 open | snoozed | ignored | resolved',
     };
   }
   const status = workStatusLib.normalizeWorkStatus(raw);
+  const existing = memory.loadQueueItem(cfg.dataDir, fingerprint);
+  if (!existing) {
+    return { ok: false, code: 'not_found', message: 'queue 中无此 fingerprint' };
+  }
+  const transition = workStatusLib.assertManualTransition(existing.workStatus, status);
+  if (!transition.ok) {
+    return {
+      ok: false,
+      code: transition.code,
+      message: transition.message,
+    };
+  }
   const wb = getWorkbenchConfig(cfg);
   const snoozeDays =
     body.snoozeDays > 0 ? Number(body.snoozeDays) : wb.defaultSnoozeDays || 3;
-  const next = memory.setQueueWorkStatus(cfg.dataDir, fingerprint, status, {
+  const opts = {
     snoozeDays,
     reason: body.reason || `manual_${status}`,
-  });
+  };
+  // 处理完成：原因/方案可空；body 未带字段时写空串（UI 弹层会带字段）
+  if (status === 'resolved') {
+    opts.rootCause = body.rootCause != null ? body.rootCause : '';
+    opts.solution = body.solution != null ? body.solution : '';
+  }
+  const next = memory.setQueueWorkStatus(cfg.dataDir, fingerprint, status, opts);
   if (!next) {
     return { ok: false, code: 'not_found', message: 'queue 中无此 fingerprint' };
   }
@@ -983,6 +1044,9 @@ function setFindingWorkStatus(fingerprint, cfg, body = {}) {
     snoozedUntil: next.snoozedUntil || null,
     reopenedBy: next.reopenedBy || null,
     ignoredStillFailing: next.ignoredStillFailing === true,
+    rootCause: next.resolutionRootCause || '',
+    solution: next.resolutionSolution || '',
+    resolvedAt: next.resolvedAt || null,
     item: next,
   };
 }

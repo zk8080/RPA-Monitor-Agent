@@ -92,7 +92,7 @@ D:\RPA-Monitor-Agent  消费：监听 OpenAPI + 诊断 Agent + 日报 / KB
   - **主路径（当前）：** 工作台理解失败/流程 → **复制瘦身交接提示 / 打开 Agent** → Coding Agent 改代码（收益最高）  
   - ✅ **S27a** 瘦身交接包（`lib/handoff.js`；诊断 opt-in；非可配全文模板）  
   - ✅ **S27b** 噪声分流 bucket（`lib/bucket.js`；元素≠代码；code 仅 py/变量；UI 三档筛选）  
-  - ✅ **S27d** workStatus（open/snoozed/ignored；新 job 唤醒；优先队列仅 open）  
+  - ✅ **S27d** workStatus（open/snoozed/ignored/resolved；新 job 唤醒；优先队列仅 open；处理完成可记原因/方案）  
   - **P2 后置：** S21 服务器源码（暂无需求）  
   - **P2 ⏸ S10c** fixOwner：归属划分未明确，暂缓  
   - **P2 ⏸ S22** develop 骨架：不如直接 Coding Agent，暂缓  

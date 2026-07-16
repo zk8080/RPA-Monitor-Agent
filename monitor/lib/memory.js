@@ -356,6 +356,10 @@ function upsertQueueItem(dataDir, item, meta = {}) {
   next.workStatusReason = ws.workStatusReason;
   next.reopenedBy = ws.reopenedBy;
   next.ignoredStillFailing = ws.ignoredStillFailing;
+  // 人工「处理完成」说明：poll 合并时保留
+  next.resolutionRootCause = ws.resolutionRootCause || '';
+  next.resolutionSolution = ws.resolutionSolution || '';
+  next.resolvedAt = ws.resolvedAt || null;
 
   // 保留诊断等扩展字段（同指纹再扫时不丢）
   if (existing) {
@@ -370,11 +374,17 @@ function upsertQueueItem(dataDir, item, meta = {}) {
 }
 
 /**
- * 人工设置 queue workStatus（open / snoozed / ignored）
+ * 人工设置 queue workStatus（open / snoozed / ignored / resolved）
  * @param {string} dataDir
  * @param {string} fingerprint
- * @param {'open'|'snoozed'|'ignored'} status
- * @param {{ snoozeDays?: number, snoozedUntil?: string, reason?: string }} [opts]
+ * @param {'open'|'snoozed'|'ignored'|'resolved'} status
+ * @param {{
+ *   snoozeDays?: number,
+ *   snoozedUntil?: string,
+ *   reason?: string,
+ *   rootCause?: string,
+ *   solution?: string,
+ * }} [opts]
  */
 function setQueueWorkStatus(dataDir, fingerprint, status, opts = {}) {
   const existing = loadQueueItem(dataDir, fingerprint);

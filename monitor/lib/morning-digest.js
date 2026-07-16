@@ -80,12 +80,14 @@ function buildMorningDigest(cfg, opts = {}) {
   let openCount = 0;
   let snoozed = 0;
   let ignored = 0;
+  let resolved = 0;
   const byBucket = {};
   for (const it of windowItems) {
     if (!it.diagnosed) undiagnosed += 1;
     const eff = workStatusLib.resolveEffectiveWorkStatus(it, now);
     if (eff.workStatus === 'snoozed') snoozed += 1;
     else if (eff.workStatus === 'ignored') ignored += 1;
+    else if (eff.workStatus === 'resolved') resolved += 1;
     else openCount += 1;
     try {
       const b = bucketLib.classifyBucket(it).bucket;
@@ -130,12 +132,12 @@ function buildMorningDigest(cfg, opts = {}) {
       `**概况** 失败指纹 **${windowItems.length}** · 待处理 open **${openCount}** · 未诊断 **${undiagnosed}**`,
     );
     lines.push(
-      `可开发 ${devN} · 环境/调度 ${opsN} · 稍后 ${snoozed} · 不提醒 ${ignored}`,
+      `可开发 ${devN} · 环境/调度 ${opsN} · 稍后 ${snoozed} · 已完成 ${resolved} · 不提醒 ${ignored}`,
     );
     lines.push(``);
 
     if (top.length === 0) {
-      lines.push(`优先列表为空（窗口内失败均已「稍后/不再提醒」）。`);
+      lines.push(`优先列表为空（窗口内失败均已「稍后/处理完成/不再提醒」）。`);
     } else {
       lines.push(`**待处理明细（前 ${topN} 条）**`);
       top.forEach((it, i) => {

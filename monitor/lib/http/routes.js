@@ -417,7 +417,7 @@ async function handleRequest(req, res, ctx) {
         return true;
       }
 
-      // S27d：处置态 open | snoozed | ignored
+      // S27d：处置态 open | snoozed | ignored | resolved
       const findingWork = pathname.match(/^\/api\/findings\/([^/]+)\/work-status\/?$/);
       if (method === 'POST' && findingWork) {
         const fingerprint = decodeURIComponent(findingWork[1]);
@@ -433,7 +433,7 @@ async function handleRequest(req, res, ctx) {
           ? 200
           : result.code === 'not_found'
             ? 404
-            : result.code === 'invalid_status'
+            : result.code === 'invalid_status' || result.code === 'terminal_resolved'
               ? 400
               : 400;
         sendJson(res, status, result);
