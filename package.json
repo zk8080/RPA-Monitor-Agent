@@ -27,6 +27,7 @@
     "test:merge": "node monitor/test_merge.js",
     "test:settings-llm": "node monitor/test_settings_llm.js",
     "test:dingtalk": "node monitor/test_dingtalk.js",
+    "test:cron": "node monitor/test_cron.js",
     "test:business-brief": "node monitor/test_business_brief.js"
   }
 }

@@ -30,7 +30,30 @@ function cronMatchesNow(expr, now = new Date()) {
 }
 
 /**
- * 当日 key：YYYY-MM-DD-HH-mm 用于标记已触发
+ * 当日该 cron 点是否已到或已过（本机时区，精确到分钟）
+ * 用于独立 1min tick：即使 tick 略晚于整点分，或进程在点后才起来，也能补跑一次。
+ * @param {string} expr
+ * @param {Date} [now]
+ */
+function cronDueToday(expr, now = new Date()) {
+  const p = parseSimpleCron(expr);
+  if (!p) return false;
+  const scheduledMs =
+    new Date(
+      now.getFullYear(),
+      now.getMonth(),
+      now.getDate(),
+      p.hour,
+      p.minute,
+      0,
+      0,
+    ).getTime();
+  return now.getTime() >= scheduledMs;
+}
+
+/**
+ * 当日 slot key：YYYY-MM-DDTHH:mm（以 cron 表达式的时分为准）
+ * 用于「今天该点已触发过」去重，与当前时刻无关。
  */
 function slotKey(expr, now = new Date()) {
   const p = parseSimpleCron(expr);
@@ -44,5 +67,6 @@ function slotKey(expr, now = new Date()) {
 module.exports = {
   parseSimpleCron,
   cronMatchesNow,
+  cronDueToday,
   slotKey,
 };

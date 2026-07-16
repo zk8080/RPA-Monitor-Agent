@@ -15,8 +15,11 @@ const { pollOnce } = require('./lib/poll');
 const { runSkill } = require('./lib/agent-runner');
 const { buildDailyReport } = require('./lib/report');
 const { acquireLock, releaseLock } = require('./lib/lock');
-const { cronMatchesNow, slotKey } = require('./lib/cron');
+const { cronDueToday, slotKey } = require('./lib/cron');
 const { startHttpServer } = require('./lib/http/server');
+
+/** 独立 cron tick 间隔：仅做时分比对 + 偶尔触发 diagnose/report，几乎无 CPU */
+const CRON_TICK_MS = 60 * 1000;
 
 function parseArgs(argv) {
   const opts = {
@@ -57,11 +60,11 @@ function printHelp() {
   -h, --help           帮助
 
 常驻时：
-  - 每 pollIntervalMinutes 执行 poll
+  - 每 pollIntervalMinutes 执行 poll（重活）
   - 每轮 poll 后 drain 未诊断队列（limit）
+  - 独立 1 分钟 cron tick 检查 diagnoseCron / reportCron（轻量，不绑 poll）
   - 默认是否 LLM：settings.llm.json 的 diagnoseUseLlm（可用 --llm / --no-llm 覆盖）
-  - diagnoseCron / reportCron（分 时 * * *）触发额外诊断/日报
-  - 钉钉晨报：仅在 reportCron（默认约 9:05）后推送；boot / 定时 poll 不发
+  - reportCron 到点或晚点补跑：写日报 + 钉钉晨报（boot / 定时 poll 不发晨报）
   - 同一本机日历日成功后不再重复发（设置页「发送测试」可 force 绕过）
   - healthPort>0 时提供 GET /health + 本机工作台 http://127.0.0.1:<port>/
   - data/service.pid 单实例锁
@@ -248,14 +251,18 @@ async function runPipeline(cfg, opts, label = 'cycle') {
   };
 
   let stopping = false;
-  let timer = null;
+  let pollTimer = null;
+  let cronTimer = null;
   let server = null;
+  /** poll / cron 互斥：避免重叠；被占用时 cron 下一分钟再试（due-today 可补跑） */
+  let cycleBusy = false;
 
   const cleanup = () => {
     if (stopping) return;
     stopping = true;
     log('shutting down…');
-    if (timer) clearInterval(timer);
+    if (pollTimer) clearInterval(pollTimer);
+    if (cronTimer) clearInterval(cronTimer);
     if (server) server.close();
     releaseLock(cfg.dataDir);
     process.exit(0);
@@ -263,6 +270,97 @@ async function runPipeline(cfg, opts, label = 'cycle') {
 
   process.on('SIGINT', cleanup);
   process.on('SIGTERM', cleanup);
+
+  function loadLiveCfg() {
+    try {
+      // eslint-disable-next-line global-require
+      return require('./lib/config').loadConfig();
+    } catch {
+      return cfg;
+    }
+  }
+
+  /**
+   * 独立 cron tick：不绑 pollInterval。
+   * - 未命中时只做时分比对（微秒级，无 I/O）
+   * - 命中后用 slotKey 保证每个日历日每个 cron 点只跑一次
+   * - cronDueToday：进程在点后才起来 / tick 略晚，仍可补跑
+   * - 失败不占 slot，下一分钟可重试
+   */
+  async function runCronTick() {
+    if (stopping || cycleBusy) return;
+    const now = new Date();
+
+    const diagnoseSk = opts.diagnose ? slotKey(cfg.diagnoseCron, now) : null;
+    const reportSk = opts.report ? slotKey(cfg.reportCron, now) : null;
+    const diagnoseDue =
+      Boolean(diagnoseSk) &&
+      cronDueToday(cfg.diagnoseCron, now) &&
+      diagnoseSk !== state.firedDiagnoseSlot;
+    const reportDue =
+      Boolean(reportSk) &&
+      cronDueToday(cfg.reportCron, now) &&
+      reportSk !== state.firedReportSlot;
+
+    if (!diagnoseDue && !reportDue) return;
+
+    cycleBusy = true;
+    try {
+      const liveCfg = loadLiveCfg();
+
+      if (diagnoseDue) {
+        try {
+          log('▶ cron diagnose');
+          await runSkill(
+            'diagnose',
+            {
+              queue: true,
+              limit: opts.diagnoseLimit,
+              useLlm: resolveUseLlm(liveCfg, opts),
+            },
+            { cfg: liveCfg },
+          );
+          state.firedDiagnoseSlot = diagnoseSk;
+          state.lastDiagnoseAt = new Date().toISOString();
+        } catch (e) {
+          log(`cron diagnose error: ${e && e.message ? e.message : e}`);
+        }
+      }
+
+      if (reportDue) {
+        try {
+          log('▶ cron report');
+          const r = buildDailyReport(liveCfg, { write: true });
+          state.firedReportSlot = reportSk;
+          state.lastReportAt = new Date().toISOString();
+          log(`  report → ${r.filePath}`);
+          await maybeSendMorningDigest(liveCfg, log);
+        } catch (e) {
+          log(`cron report error: ${e && e.message ? e.message : e}`);
+        }
+      }
+    } finally {
+      cycleBusy = false;
+    }
+  }
+
+  async function runPollInterval() {
+    if (stopping) return;
+    if (cycleBusy) {
+      log('poll-interval skip: previous cycle still running');
+      return;
+    }
+    cycleBusy = true;
+    try {
+      await runPipeline(cfg, { ...opts, report: false }, 'poll-interval');
+      state.lastPollAt = new Date().toISOString();
+      if (opts.diagnose) state.lastDiagnoseAt = state.lastPollAt;
+    } catch (e) {
+      log(`cycle error: ${e.message}`);
+    } finally {
+      cycleBusy = false;
+    }
+  }
 
   try {
     if (opts.once) {
@@ -279,76 +377,39 @@ async function runPipeline(cfg, opts, label = 'cycle') {
     server = startHttpServer(cfg, state, { log });
     log(
       `service started pid=${process.pid} pollEvery=${cfg.pollIntervalMinutes}m ` +
-        `diagnoseCron=${cfg.diagnoseCron} reportCron=${cfg.reportCron}`,
+        `cronTick=60s diagnoseCron=${cfg.diagnoseCron} reportCron=${cfg.reportCron}`,
     );
 
     // 启动先跑一轮（失败只记日志，不拖垮 HTTP / 常驻）
     try {
+      cycleBusy = true;
       await runPipeline(cfg, opts, 'boot');
       state.lastPollAt = new Date().toISOString();
       if (opts.diagnose) state.lastDiagnoseAt = state.lastPollAt;
       if (opts.report) state.lastReportAt = state.lastPollAt;
     } catch (e) {
       log(`boot error (service keeps running): ${e && e.message ? e.message : e}`);
+    } finally {
+      cycleBusy = false;
     }
 
     const intervalMs = Math.max(1, cfg.pollIntervalMinutes || 15) * 60 * 1000;
-    timer = setInterval(async () => {
-      if (stopping) return;
-      try {
-        await runPipeline(cfg, { ...opts, report: false }, 'poll-interval');
-        state.lastPollAt = new Date().toISOString();
-        if (opts.diagnose) state.lastDiagnoseAt = state.lastPollAt;
-
-        const now = new Date();
-        if (opts.diagnose && cronMatchesNow(cfg.diagnoseCron, now)) {
-          const sk = slotKey(cfg.diagnoseCron, now);
-          if (sk && sk !== state.firedDiagnoseSlot) {
-            state.firedDiagnoseSlot = sk;
-            log('▶ cron diagnose');
-            let liveCfg = cfg;
-            try {
-              // eslint-disable-next-line global-require
-              liveCfg = require('./lib/config').loadConfig();
-            } catch {
-              /* keep */
-            }
-            await runSkill(
-              'diagnose',
-              {
-                queue: true,
-                limit: opts.diagnoseLimit,
-                useLlm: resolveUseLlm(liveCfg, opts),
-              },
-              { cfg: liveCfg },
-            );
-            state.lastDiagnoseAt = new Date().toISOString();
-          }
-        }
-        if (opts.report && cronMatchesNow(cfg.reportCron, now)) {
-          const sk = slotKey(cfg.reportCron, now);
-          if (sk && sk !== state.firedReportSlot) {
-            state.firedReportSlot = sk;
-            log('▶ cron report');
-            let liveCfg = cfg;
-            try {
-              // eslint-disable-next-line global-require
-              liveCfg = require('./lib/config').loadConfig();
-            } catch {
-              /* keep */
-            }
-            const r = buildDailyReport(liveCfg, { write: true });
-            state.lastReportAt = new Date().toISOString();
-            log(`  report → ${r.filePath}`);
-            await maybeSendMorningDigest(liveCfg, log);
-          }
-        }
-      } catch (e) {
-        log(`cycle error: ${e.message}`);
-      }
+    pollTimer = setInterval(() => {
+      runPollInterval().catch((e) => log(`poll-interval error: ${e.message}`));
     }, intervalMs);
 
-    log(`interval armed every ${cfg.pollIntervalMinutes} minutes (Ctrl+C 退出)`);
+    // 独立 1min tick：与 poll 解耦，保证 reportCron≈09:05 不会因 120min poll 漏掉
+    cronTimer = setInterval(() => {
+      runCronTick().catch((e) => log(`cron tick error: ${e.message}`));
+    }, CRON_TICK_MS);
+    // 启动后尽快检查一次（支持「点后启动 → 今日补跑晨报」）
+    setTimeout(() => {
+      runCronTick().catch((e) => log(`cron tick error: ${e.message}`));
+    }, 2000);
+
+    log(
+      `timers armed: poll every ${cfg.pollIntervalMinutes}m · cron every 60s (Ctrl+C 退出)`,
+    );
 
     // 未捕获异常/拒绝：记日志，尽量保持常驻（避免工作台端口突然消失）
     process.on('uncaughtException', (err) => {
