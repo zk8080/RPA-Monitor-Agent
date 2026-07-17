@@ -3,13 +3,16 @@
  *
  * 给外部 Cursor / Claude Code 等，不是 Monitor 内 LLM 的 system/user prompt。
  * 默认短：路径 + 现象 + 最短约束；诊断结论 opt-in，避免噪音。
+ * 应用 develop 可附带「聚焦节点」（来自 understand flowRoles），引导节点级深读。
  *
- * 不可配置全文模板（首期）；仅 includeDiagnose 等开关。
+ * 不可配置全文模板（首期）；仅 includeDiagnose / focusNodes 等开关。
  */
 
 const REMARK_MAX = 280;
 const DIAG_FIELD_MAX = 320;
 const TASK_NOTE_MAX = 600;
+const ROLE_MAX = 160;
+const MAX_FOCUS_NODES = 8;
 
 function clip(s, max) {
   const t = String(s == null ? '' : s).trim();
@@ -23,33 +26,167 @@ function truthyFlag(v) {
 }
 
 /**
+ * 规范化用户勾选的聚焦节点（字符串或对象均可）
+ * @param {Array<string|object>} raw
+ * @returns {Array<{ name: string, filename?: string, kind?: string, role?: string, blockCount?: number|null, pyFile?: string }>}
+ */
+function normalizeFocusNodes(raw) {
+  if (!Array.isArray(raw) || !raw.length) return [];
+  const out = [];
+  const seen = new Set();
+  for (const item of raw) {
+    if (out.length >= MAX_FOCUS_NODES) break;
+    let name = '';
+    let filename = '';
+    let kind = '';
+    let role = '';
+    let blockCount = null;
+    let pyFile = '';
+    if (typeof item === 'string') {
+      name = item.trim();
+    } else if (item && typeof item === 'object') {
+      name = String(item.name || item.label || item.filename || '').trim();
+      filename = String(item.filename || item.file || '').trim();
+      kind = String(item.kind || item.type || '').trim();
+      role = String(item.role || item.summary || '').trim();
+      if (item.blockCount != null && Number.isFinite(Number(item.blockCount))) {
+        blockCount = Number(item.blockCount);
+      }
+      pyFile = String(item.pyFile || item.py || '').trim();
+    }
+    if (!name && filename) name = filename;
+    if (!name) continue;
+    const key = `${name}|${filename || ''}|${kind || ''}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({
+      name,
+      filename: filename || undefined,
+      kind: kind || undefined,
+      role: role ? clip(role, ROLE_MAX) : undefined,
+      blockCount: blockCount != null ? blockCount : undefined,
+      pyFile: pyFile || undefined,
+    });
+  }
+  return out;
+}
+
+/**
+ * 从 understand 结果提取可选节点列表（优先 flowRoles，其次 callGraph 边端点）
+ * @param {object} understandResult rpa.understandFlow 返回体
+ * @returns {Array<object>}
+ */
+function listFocusCandidates(understandResult) {
+  const r = understandResult || {};
+  const out = [];
+  const seen = new Set();
+
+  const push = (node) => {
+    const list = normalizeFocusNodes([node]);
+    if (!list.length) return;
+    const n = list[0];
+    const key = `${n.name}|${n.filename || ''}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push(n);
+  };
+
+  const roles = Array.isArray(r.flowRoles) ? r.flowRoles : [];
+  for (const fr of roles) {
+    if (typeof fr === 'string') push({ name: fr, kind: 'flow' });
+    else if (fr && typeof fr === 'object') {
+      push({
+        name: fr.name || fr.filename,
+        filename: fr.filename,
+        kind: fr.kind || (fr.pyFile ? 'code' : 'visual'),
+        role: fr.role,
+        blockCount: fr.blockCount,
+        pyFile: fr.pyFile,
+      });
+    }
+  }
+
+  // flowRoles 为空时从 callGraph 补
+  if (!out.length && r.callGraph) {
+    const modules = Array.isArray(r.callGraph.codeModules) ? r.callGraph.codeModules : [];
+    for (const m of modules) {
+      push({
+        name: m.name || m.filename,
+        filename: m.filename,
+        kind: 'code',
+        role: m.summary || m.pySummary,
+        pyFile: m.filename,
+      });
+    }
+    const edges = Array.isArray(r.callGraph.edges) ? r.callGraph.edges : [];
+    for (const e of edges) {
+      if (e && e.from) push({ name: String(e.from), kind: 'flow' });
+      if (e && e.to) push({ name: String(e.to), kind: e.toKind || 'flow' });
+    }
+  }
+
+  return out.slice(0, 80);
+}
+
+/**
  * @param {object} ctx
  * @param {string} [ctx.name]
  * @param {string} [ctx.robotUuid]
  * @param {string} [ctx.xbotDir]
  * @param {string} [ctx.taskNote]
+ * @param {Array} [ctx.focusNodes]
  * @returns {string}
  */
 function buildDevelopPrompt(ctx = {}) {
+  const focusNodes = normalizeFocusNodes(ctx.focusNodes);
+  const hasFocus = focusNodes.length > 0;
+
   const lines = [
-    '# 任务 · 影刀 RPA 开发 / 维护',
-    '当前工作区应已是该应用的 xbot_robot 目录。先理解结构，再按需求最小改动；写盘前说明影响面。',
+    hasFocus ? '# 任务 · 影刀 RPA 节点深读 / 维护' : '# 任务 · 影刀 RPA 开发 / 维护',
+    hasFocus
+      ? '当前工作区应已是该应用的 xbot_robot 目录。**只围绕下方聚焦节点**分析逻辑并按需最小改动；不要先输出整应用/全库概览。'
+      : '当前工作区应已是该应用的 xbot_robot 目录。先理解结构，再按需求最小改动；写盘前说明影响面。',
     '',
     '## 工程',
   ];
   if (ctx.name) lines.push(`- 应用：${ctx.name}`);
   if (ctx.robotUuid) lines.push(`- robotUuid：${ctx.robotUuid}`);
   if (ctx.xbotDir) lines.push(`- 路径：${ctx.xbotDir}`);
+
+  if (hasFocus) {
+    lines.push('', '## 聚焦节点（优先，按勾选顺序）');
+    focusNodes.forEach((n, i) => {
+      const bits = [];
+      if (n.filename && n.filename !== n.name) bits.push(`文件 ${n.filename}`);
+      if (n.kind) bits.push(n.kind);
+      if (n.blockCount != null) bits.push(`${n.blockCount} 块`);
+      if (n.pyFile) bits.push(`py ${n.pyFile}`);
+      const meta = bits.length ? `（${bits.join(' · ')}）` : '';
+      lines.push(`${i + 1}. **${n.name}**${meta}`);
+      if (n.role) lines.push(`   - 角色/摘要：${n.role}`);
+    });
+    lines.push(
+      '',
+      '## 分析要求',
+      '1. 对每个聚焦节点说明：职责、主要输入/输出、关键分支与失败处理、调用的子流程/py',
+      '2. 打开对应 .flow.json / .py，结合块指令与变量；需要时只读上下游 1 跳',
+      '3. **禁止**先 `/rpa understand` 整库摘要或复述全流程阶段图；未要求时不要铺开未勾选节点',
+      '4. 若要改代码：最小改动；写盘前说明影响面与如何验证',
+    );
+  } else {
+    lines.push(
+      '',
+      '## 怎么做',
+      '1. `/rpa understand` 或读 package.json / .dev 下流程与 py',
+      '2. 最小改动；改 .flow.json 遵守 rpa skill 确认门槛',
+      '3. 不要整库重写，不要假设其他未打开的应用目录',
+    );
+  }
+
   if (ctx.taskNote) {
     lines.push('', '## 本次需求', clip(ctx.taskNote, TASK_NOTE_MAX));
   }
-  lines.push(
-    '',
-    '## 怎么做',
-    '1. `/rpa understand` 或读 package.json / .dev 下流程与 py',
-    '2. 最小改动；改 .flow.json 遵守 rpa skill 确认门槛',
-    '3. 不要整库重写，不要假设其他未打开的应用目录',
-  );
+
   return lines.join('\n');
 }
 
@@ -123,14 +260,29 @@ function buildFixPrompt(ctx = {}) {
     if (ctx.suggestion) lines.push(`- 建议：${clip(ctx.suggestion, DIAG_FIELD_MAX)}`);
   }
 
-  lines.push(
-    '',
-    '## 怎么做',
-    '1. `/rpa understand` 或打开相关 .flow.json / py，对照流程名与行号（行号可能是块序号）',
-    '2. 最小改动；写盘前说明影响面',
-    '3. 改完说明如何验证（重跑任务 / 同指纹是否再出现）',
-    '4. 不要整库重写；不要让用户再贴整份流程 JSON',
-  );
+  // 有明确失败位置时，收紧「先整库 understand」的引导
+  if (ctx.flowName) {
+    lines.push(
+      '',
+      '## 怎么做',
+      `1. **先定位**流程「${ctx.flowName}」${
+        ctx.lineNumber != null && ctx.lineNumber !== '' ? ` 附近 L${ctx.lineNumber}` : ''
+      } 对应的 .flow.json / py；行号可能是块序号`,
+      '2. 围绕失败点分析输入/等待/分支，不要先输出整应用概览',
+      '3. 最小改动；写盘前说明影响面',
+      '4. 改完说明如何验证（重跑任务 / 同指纹是否再出现）',
+      '5. 不要整库重写；不要让用户再贴整份流程 JSON',
+    );
+  } else {
+    lines.push(
+      '',
+      '## 怎么做',
+      '1. `/rpa understand` 或打开相关 .flow.json / py，对照流程名与行号（行号可能是块序号）',
+      '2. 最小改动；写盘前说明影响面',
+      '3. 改完说明如何验证（重跑任务 / 同指纹是否再出现）',
+      '4. 不要整库重写；不要让用户再贴整份流程 JSON',
+    );
+  }
   return lines.join('\n');
 }
 
@@ -165,10 +317,13 @@ function measurePrompt(markdown) {
 module.exports = {
   REMARK_MAX,
   DIAG_FIELD_MAX,
+  MAX_FOCUS_NODES,
   buildDevelopPrompt,
   buildFixPrompt,
   buildAgentPrompt,
   measurePrompt,
   truthyFlag,
   clip,
+  normalizeFocusNodes,
+  listFocusCandidates,
 };

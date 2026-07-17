@@ -180,8 +180,17 @@
   /**
    * S27a：从服务端拉取瘦身交接提示词（业务在 lib/handoff.js）
    * fix 默认不含诊断；includeDiagnose=true 时附带 Monitor 判断。
-   * @param {{ mode?: 'fix'|'develop', fingerprint?: string, robotUuid?: string, includeDiagnose?: boolean }} opts
-   * @returns {Promise<{ ok: boolean, markdown?: string, message?: string, includeDiagnose?: boolean }>}
+   * develop 可 POST focusNodes / taskNote；includeCandidates 拉节点候选。
+   * @param {{
+   *   mode?: 'fix'|'develop',
+   *   fingerprint?: string,
+   *   robotUuid?: string,
+   *   includeDiagnose?: boolean,
+   *   taskNote?: string,
+   *   focusNodes?: object[],
+   *   includeCandidates?: boolean,
+   * }} opts
+   * @returns {Promise<{ ok: boolean, markdown?: string, message?: string, includeDiagnose?: boolean, candidates?: object[] }>}
    */
   async function fetchHandoff(opts = {}) {
     try {
@@ -193,10 +202,275 @@
       }
       const robotUuid = opts.robotUuid;
       if (!robotUuid) return { ok: false, message: '缺少 robotUuid' };
-      return await api(`/api/apps/${encodeURIComponent(robotUuid)}/handoff`);
+      const needPost =
+        opts.includeCandidates ||
+        (opts.focusNodes && opts.focusNodes.length) ||
+        (opts.taskNote && String(opts.taskNote).trim());
+      if (needPost) {
+        return await api(`/api/apps/${encodeURIComponent(robotUuid)}/handoff`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            taskNote: opts.taskNote || '',
+            focusNodes: opts.focusNodes || [],
+            includeCandidates: opts.includeCandidates === true,
+          }),
+        });
+      }
+      const q = opts.includeCandidates ? '?includeCandidates=1' : '';
+      return await api(`/api/apps/${encodeURIComponent(robotUuid)}/handoff${q}`);
     } catch (e) {
       return { ok: false, message: e.message || String(e) };
     }
+  }
+
+  /**
+   * 应用页：复制提示 / 打开 Agent 前选聚焦节点（数据来自 understand flowRoles）
+   * @param {{ robotUuid: string, appName?: string, presetTaskNote?: string }} opts
+   * @returns {Promise<{ ok: boolean, markdown?: string, focusNodes?: object[], taskNote?: string }>}
+   */
+  function openHandoffFocusDialog(opts = {}) {
+    const robotUuid = opts.robotUuid;
+    if (!robotUuid) {
+      return Promise.resolve({ ok: false });
+    }
+    return new Promise((resolve) => {
+      const existing = document.getElementById('handoff-focus-dialog');
+      if (existing) existing.remove();
+
+      const overlay = document.createElement('div');
+      overlay.id = 'handoff-focus-dialog';
+      overlay.className = 'modal-overlay';
+      overlay.setAttribute('role', 'dialog');
+      overlay.setAttribute('aria-modal', 'true');
+      overlay.setAttribute('aria-labelledby', 'handoff-focus-title');
+      overlay.innerHTML = `
+        <div class="modal-card modal-card-lg">
+          <h2 id="handoff-focus-title" class="modal-title">复制交接提示</h2>
+          <p class="hint modal-lead">勾选要实现/分析的<strong>流程节点</strong>（来自实现流程），Agent 会优先深读这些节点，而不是整库概览。不选则复制通用维护提示。</p>
+          <div id="handoff-focus-status" class="hint mb">正在加载节点…</div>
+          <div class="handoff-focus-toolbar" hidden>
+            <label class="handoff-focus-search">
+              <span class="sr-only">筛选节点</span>
+              <input type="search" id="handoff-focus-filter" class="input" placeholder="筛选节点名称…" autocomplete="off"/>
+            </label>
+            <div class="handoff-focus-bulk">
+              <button type="button" class="btn sm ghost" data-focus-all>全选</button>
+              <button type="button" class="btn sm ghost" data-focus-none>清空</button>
+              <span class="meta" id="handoff-focus-count">已选 0</span>
+            </div>
+          </div>
+          <div id="handoff-focus-list" class="handoff-focus-list" role="group" aria-label="聚焦节点" hidden></div>
+          <label class="field">
+            <span class="field-label">本次需求 <span class="faint">（选填）</span></span>
+            <textarea id="handoff-focus-note" class="input" rows="2" placeholder="例：分析「NMPA-获批通知」的循环与写回逻辑；评估空值是否会导致跳过">${esc(
+              opts.presetTaskNote || '',
+            )}</textarea>
+          </label>
+          <div class="modal-actions">
+            <button type="button" class="btn ghost" data-focus-cancel>取消</button>
+            <button type="button" class="btn primary" data-focus-ok>复制提示</button>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(overlay);
+
+      const statusEl = overlay.querySelector('#handoff-focus-status');
+      const listEl = overlay.querySelector('#handoff-focus-list');
+      const toolbar = overlay.querySelector('.handoff-focus-toolbar');
+      const countEl = overlay.querySelector('#handoff-focus-count');
+      const filterEl = overlay.querySelector('#handoff-focus-filter');
+      const noteEl = overlay.querySelector('#handoff-focus-note');
+      const okBtn = overlay.querySelector('[data-focus-ok]');
+
+      /** @type {object[]} */
+      let candidates = [];
+
+      const finish = (result) => {
+        document.removeEventListener('keydown', onKey);
+        overlay.remove();
+        resolve(result);
+      };
+      const onKey = (e) => {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          finish({ ok: false });
+        }
+      };
+      document.addEventListener('keydown', onKey);
+
+      overlay.addEventListener('click', (e) => {
+        if (e.target === overlay) finish({ ok: false });
+      });
+      overlay.querySelector('[data-focus-cancel]')?.addEventListener('click', () => {
+        finish({ ok: false });
+      });
+
+      function updateCount() {
+        if (!countEl || !listEl) return;
+        const n = listEl.querySelectorAll('input[type="checkbox"]:checked').length;
+        countEl.textContent = `已选 ${n}`;
+      }
+
+      function selectedNodes() {
+        if (!listEl) return [];
+        const boxes = listEl.querySelectorAll('input[type="checkbox"]:checked');
+        const out = [];
+        boxes.forEach((box) => {
+          const idx = Number(box.getAttribute('data-idx'));
+          if (Number.isFinite(idx) && candidates[idx]) out.push(candidates[idx]);
+        });
+        return out;
+      }
+
+      function renderList(filter = '') {
+        if (!listEl) return;
+        const q = String(filter || '').trim().toLowerCase();
+        const rows = candidates
+          .map((n, idx) => {
+            const label = n.name || n.filename || `节点${idx + 1}`;
+            const hay = [
+              label,
+              n.filename,
+              n.kind,
+              n.role,
+              n.pyFile,
+            ]
+              .filter(Boolean)
+              .join(' ')
+              .toLowerCase();
+            if (q && !hay.includes(q)) return '';
+            const bits = [];
+            if (n.kind) bits.push(n.kind);
+            if (n.blockCount != null) bits.push(`${n.blockCount} 块`);
+            if (n.filename && n.filename !== n.name) bits.push(n.filename);
+            if (n.pyFile) bits.push(n.pyFile);
+            const meta = bits.length ? bits.join(' · ') : '';
+            const role = n.role ? `<div class="handoff-focus-role">${esc(n.role)}</div>` : '';
+            return `<label class="handoff-focus-item">
+              <input type="checkbox" data-idx="${idx}" />
+              <span class="handoff-focus-body">
+                <span class="handoff-focus-name">${esc(label)}</span>
+                ${meta ? `<span class="handoff-focus-meta">${esc(meta)}</span>` : ''}
+                ${role}
+              </span>
+            </label>`;
+          })
+          .filter(Boolean)
+          .join('');
+        listEl.innerHTML =
+          rows ||
+          `<div class="muted" style="padding:8px 4px">${
+            candidates.length ? '无匹配节点' : '暂无节点'
+          }</div>`;
+        listEl.querySelectorAll('input[type="checkbox"]').forEach((box) => {
+          box.addEventListener('change', updateCount);
+        });
+        updateCount();
+      }
+
+      overlay.querySelector('[data-focus-all]')?.addEventListener('click', () => {
+        listEl?.querySelectorAll('input[type="checkbox"]').forEach((b) => {
+          b.checked = true;
+        });
+        updateCount();
+      });
+      overlay.querySelector('[data-focus-none]')?.addEventListener('click', () => {
+        listEl?.querySelectorAll('input[type="checkbox"]').forEach((b) => {
+          b.checked = false;
+        });
+        updateCount();
+      });
+      filterEl?.addEventListener('input', () => renderList(filterEl.value));
+
+      okBtn?.addEventListener('click', async () => {
+        if (okBtn) {
+          okBtn.disabled = true;
+          okBtn.textContent = '生成中…';
+        }
+        const focusNodes = selectedNodes();
+        const taskNote = noteEl ? noteEl.value : '';
+        try {
+          const res = await fetchHandoff({
+            mode: 'develop',
+            robotUuid,
+            focusNodes,
+            taskNote,
+          });
+          if (!res.ok || !res.markdown) {
+            toast(res.message || '生成提示失败');
+            if (okBtn) {
+              okBtn.disabled = false;
+              okBtn.textContent = '复制提示';
+            }
+            return;
+          }
+          finish({
+            ok: true,
+            markdown: res.markdown,
+            focusNodes,
+            taskNote,
+          });
+        } catch (e) {
+          toast(e.message || '生成提示失败');
+          if (okBtn) {
+            okBtn.disabled = false;
+            okBtn.textContent = '复制提示';
+          }
+        }
+      });
+
+      // 加载候选节点：优先 handoff includeCandidates（走 understand 缓存）
+      (async () => {
+        try {
+          const res = await fetchHandoff({
+            mode: 'develop',
+            robotUuid,
+            includeCandidates: true,
+          });
+          candidates = Array.isArray(res.candidates) ? res.candidates : [];
+          if (!candidates.length) {
+            // 再试 understand 接口，客户端本地抽 flowRoles
+            const u = await api(`/api/apps/${encodeURIComponent(robotUuid)}/understand`);
+            const r = u && u.result;
+            if (u && u.ok && r && r.ok !== false && Array.isArray(r.flowRoles)) {
+              candidates = r.flowRoles.map((fr) => {
+                if (typeof fr === 'string') return { name: fr, kind: 'flow' };
+                return {
+                  name: fr.name || fr.filename || '',
+                  filename: fr.filename || '',
+                  kind: fr.kind || (fr.pyFile ? 'code' : 'visual'),
+                  role: fr.role || '',
+                  blockCount: fr.blockCount,
+                  pyFile: fr.pyFile || '',
+                };
+              }).filter((n) => n.name);
+            }
+          }
+          if (statusEl) {
+            if (candidates.length) {
+              statusEl.textContent = `共 ${candidates.length} 个节点可选（来自实现流程）· 应用 ${opts.appName || robotUuid}`;
+            } else {
+              statusEl.textContent =
+                '未解析到节点（可仍复制通用提示，或先打开「实现流程」触发解析）';
+            }
+          }
+          if (toolbar) toolbar.hidden = !candidates.length;
+          if (listEl) {
+            listEl.hidden = !candidates.length;
+            if (candidates.length) renderList('');
+          }
+        } catch (e) {
+          if (statusEl) {
+            statusEl.textContent = `加载节点失败：${e.message || e}。仍可复制通用提示。`;
+          }
+        }
+        requestAnimationFrame(() => {
+          if (filterEl && candidates.length) filterEl.focus();
+          else noteEl?.focus();
+        });
+      })();
+    });
   }
 
   function setActiveHandoff({ path = '', agentPrompt = '' } = {}) {
@@ -430,7 +704,7 @@
         : '';
     const copyPromptBtn =
       showCopyPrompt && prompt
-        ? `<button type="button" class="btn sm ghost" id="btn-copy-handoff" title="复制给 Coding Agent 的瘦身提示词">复制提示</button>`
+        ? `<button type="button" class="btn sm ghost" id="btn-copy-handoff" title="复制给 Coding Agent 的提示词（应用页可选聚焦节点）">复制提示</button>`
         : '';
     const diagToggle = showDiagnoseToggle
       ? `<label class="handoff-toggle" title="默认不附带，避免给 Coding Agent 噪音">
@@ -454,7 +728,7 @@
           ${openMenu || ''}
         </div>
       </div>
-      <p class="hint handoff-hint">交接提示默认精简（路径 + 现象）；打开 Agent 时会自动复制到剪贴板。</p>
+      <p class="hint handoff-hint">交接提示默认精简；应用页复制时可勾选聚焦节点。打开 Agent 时会自动复制到剪贴板。</p>
     </div>`;
   }
 
@@ -3064,7 +3338,9 @@
                       ? 'badge danger'
                       : reason === 'can_preview'
                         ? 'badge ok'
-                        : 'badge';
+                        : reason === 'recent_open'
+                          ? 'badge faint'
+                          : 'badge';
                 return `<span class="${cls}">${esc(lab)}</span>`;
               })
               .join('');
@@ -3547,12 +3823,23 @@
     const copyHandoffApp = $('#btn-copy-handoff');
     if (copyHandoffApp) {
       copyHandoffApp.onclick = async () => {
-        if (!agentPrompt) {
-          toast(handoffRes.message || '暂无交接提示');
-          return;
+        const picked = await openHandoffFocusDialog({
+          robotUuid,
+          appName: detail.name || robotUuid,
+        });
+        if (!picked.ok || !picked.markdown) return;
+        const ok = await copyText(
+          picked.markdown,
+          picked.focusNodes && picked.focusNodes.length
+            ? `已复制（聚焦 ${picked.focusNodes.length} 节点）`
+            : '开发提示已复制',
+        );
+        if (ok) {
+          flashCopied(copyHandoffApp);
+          setActiveHandoff({ path: detail.xbotDir || '', agentPrompt: picked.markdown });
+          // 同步给后续「打开 Agent」
+          bindOpenAgentControls(content, { robotUuid, prompt: picked.markdown });
         }
-        const ok = await copyText(agentPrompt, '开发提示已复制');
-        if (ok) flashCopied(copyHandoffApp);
       };
     }
     bindOpenAgentControls(content, { robotUuid, prompt: agentPrompt });

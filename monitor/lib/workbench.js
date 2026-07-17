@@ -171,13 +171,15 @@ function invalidateAppsCache() {
   memCache = null;
 }
 
-/** 优先原因权重：未诊断 > 复发 > 跨应用 > 可预览修 > 高频 */
+/** 优先原因权重：未诊断 > 复发 > 跨应用 > 可预览修 > 高频 > 近窗 open */
 const PRIORITY_WEIGHTS = {
   undiagnosed: 1000,
   regressed: 800,
   cross_app: 600,
   can_preview: 400,
   high_occurrence: 200,
+  /** 无强信号时的兜底：仍展示近窗 open，避免优先区假空白 */
+  recent_open: 10,
 };
 
 const PRIORITY_LABELS = {
@@ -186,6 +188,7 @@ const PRIORITY_LABELS = {
   cross_app: '跨应用',
   can_preview: '可预览修',
   high_occurrence: '高频',
+  recent_open: '近 24h',
 };
 
 /**
@@ -231,7 +234,8 @@ function crossFingerprintSet(groups) {
  * 今日优先队列：按失败指纹排序，告诉人「先处理谁」
  * 仅 workStatus 有效 open（snoozed 过期算 open；ignored 不进）
  * 可选 recentDays：lastFailureAt 在滚动窗口内（默认 1=24h；0=不限）
- * 排序：未诊断 > 复发 > 跨应用 > 可预览修 > 高频 occurrence；同分按失败时间新→旧
+ * 排序：未诊断 > 复发 > 跨应用 > 可预览修 > 高频 > 近窗 open；同分按失败时间新→旧
+ * 无强信号的 open 仍入列（reason=recent_open，低分），避免优先区假空白。
  *
  * @param {object[]} queueItems
  * @param {{
@@ -319,8 +323,11 @@ function buildPriorityQueue(queueItems, opts = {}) {
       score += PRIORITY_WEIGHTS.high_occurrence + Math.min(occ, 20) * 5;
     }
 
-    // 无任何优先信号则跳过（已诊断、单次、非跨应用、无预览）
-    if (!reasons.length) continue;
+    // 无强信号：仍入列，低权 recent_open（有 open 待办就不假空白）
+    if (!reasons.length) {
+      reasons.push('recent_open');
+      score += PRIORITY_WEIGHTS.recent_open;
+    }
 
     const names = nameResolver(it) || {};
     const failAt = failureTimeOf(it);
@@ -1122,7 +1129,7 @@ function getFindingHandoff(fingerprint, cfg, opts = {}) {
  * S27a：应用开发/维护交接提示词
  * @param {string} robotUuid
  * @param {object} cfg
- * @param {{ taskNote?: string }} [opts]
+ * @param {{ taskNote?: string, focusNodes?: Array, includeCandidates?: boolean }} [opts]
  */
 function getAppHandoff(robotUuid, cfg, opts = {}) {
   if (!robotUuid) {
@@ -1131,25 +1138,47 @@ function getAppHandoff(robotUuid, cfg, opts = {}) {
   const detail = getAppDetail(robotUuid, cfg);
   if (!detail.ok) return detail;
 
+  const focusNodes = handoff.normalizeFocusNodes(opts.focusNodes);
   const ctx = {
     mode: 'develop',
     name: detail.name || robotUuid,
     robotUuid,
     xbotDir: detail.xbotDir || '',
     taskNote: opts.taskNote || '',
+    focusNodes,
   };
   const markdown = handoff.buildDevelopPrompt(ctx);
   const measure = handoff.measurePrompt(markdown);
+
+  /** 可选：附带 understand 节点候选，供工作台勾选弹窗 */
+  let candidates = null;
+  if (opts.includeCandidates === true) {
+    const u = getAppUnderstand(robotUuid, cfg, {});
+    if (u.ok && u.result && u.result.ok !== false) {
+      candidates = handoff.listFocusCandidates(u.result);
+    } else {
+      candidates = [];
+    }
+  }
+
+  const focusLabel =
+    focusNodes.length > 0
+      ? `聚焦 ${focusNodes.length} 节点`
+      : '开发';
   return {
     ok: true,
     mode: 'develop',
     markdown,
-    summary: `开发：${ctx.name}`,
+    summary: `${focusLabel}：${ctx.name}`,
     includeDiagnose: false,
+    focusCount: focusNodes.length,
+    focusNodes,
+    candidates,
     meta: {
       robotUuid,
       appName: ctx.name || null,
       xbotDir: ctx.xbotDir || null,
+      focusCount: focusNodes.length,
     },
     ...measure,
   };

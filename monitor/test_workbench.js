@@ -134,12 +134,17 @@ const pq = buildPriorityQueue(
     recentDays: 0, // 不限时间，避免环境日期影响单测
   },
 );
-assert.ok(pq.length >= 4);
+assert.ok(pq.length >= 5);
 assert.strictEqual(pq[0].fingerprint, 'fp-undiag', '未诊断应排最前');
 assert.strictEqual(pq[1].fingerprint, 'fp-regressed', '复发次之');
 assert.ok(pq.some((x) => x.fingerprint === 'fp-cross' && x.reasons.includes('cross_app')));
 assert.ok(pq.some((x) => x.fingerprint === 'fp-diag-high' && x.reasons.includes('high_occurrence')));
-assert.ok(!pq.some((x) => x.fingerprint === 'fp-quiet'), '无优先信号应剔除');
+const quiet = pq.find((x) => x.fingerprint === 'fp-quiet');
+assert.ok(quiet, '无强信号的 open 也应进优先');
+assert.ok(quiet.reasons.includes('recent_open'));
+assert.ok(quiet.reasonLabels.includes('近 24h'));
+assert.ok(quiet.score < pq[0].score, '兜底分应低于强信号');
+assert.strictEqual(pq[pq.length - 1].fingerprint, 'fp-quiet', '无强信号应排最后');
 assert.ok(pq[0].reasonLabels.includes('未诊断'));
 
 // --- open path guard ---

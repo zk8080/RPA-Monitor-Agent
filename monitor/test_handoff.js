@@ -64,7 +64,46 @@ function testTemplates() {
   assert.ok(dev.includes('开发 / 维护'));
   assert.ok(dev.includes('DemoApp'));
   assert.ok(!dev.includes('失败现场'));
+  assert.ok(!dev.includes('聚焦节点'));
   assert.ok(dev.length < 900);
+
+  const focused = handoff.buildDevelopPrompt({
+    name: 'DemoApp',
+    xbotDir: 'D:\\xbot\\Demo',
+    focusNodes: [
+      {
+        name: 'NMPA-获批通知',
+        filename: 'process2',
+        kind: 'visual',
+        blockCount: 74,
+        role: '爬取通知并写回',
+      },
+      { name: 'date_process', kind: 'code', pyFile: 'date_process.py' },
+    ],
+    taskNote: '分析循环与空值分支',
+  });
+  assert.ok(focused.includes('节点深读'));
+  assert.ok(focused.includes('聚焦节点'));
+  assert.ok(focused.includes('NMPA-获批通知'));
+  assert.ok(focused.includes('date_process'));
+  assert.ok(focused.includes('禁止'));
+  assert.ok(focused.includes('分析循环与空值分支'));
+  assert.ok(!focused.includes('/rpa understand` 或读 package.json'));
+
+  const tooMany = handoff.normalizeFocusNodes(
+    Array.from({ length: 20 }, (_, i) => ({ name: `n${i}` })),
+  );
+  assert.strictEqual(tooMany.length, handoff.MAX_FOCUS_NODES);
+
+  const candidates = handoff.listFocusCandidates({
+    flowRoles: [
+      { name: 'main', filename: 'main', kind: 'visual', blockCount: 10, role: '入口' },
+      { name: 'main', filename: 'main', kind: 'visual' }, // 去重
+      { name: 'sub', filename: 'process1', kind: 'visual', role: '子流程' },
+    ],
+  });
+  assert.strictEqual(candidates.length, 2);
+  assert.strictEqual(candidates[0].name, 'main');
 
   const viaAgent = handoff.buildAgentPrompt({
     mode: 'fix',
@@ -76,6 +115,16 @@ function testTemplates() {
 
   const viaDev = handoff.buildAgentPrompt({ mode: 'develop', name: 'Y' });
   assert.ok(viaDev.includes('开发 / 维护'));
+
+  // 有 flowName 时 fix 引导围绕失败点
+  const fixLoc = handoff.buildFixPrompt({
+    name: 'A',
+    flowName: 'main',
+    lineNumber: 5,
+    errorType: 'E',
+  });
+  assert.ok(fixLoc.includes('先定位'));
+  assert.ok(fixLoc.includes('main'));
 
   console.log('ok templates');
 }
@@ -134,6 +183,24 @@ function testWorkbenchHandoff() {
   assert.strictEqual(app.ok, true);
   assert.strictEqual(app.mode, 'develop');
   assert.ok(app.markdown.includes('开发 / 维护'));
+  assert.strictEqual(app.focusCount, 0);
+
+  const appFocus = workbench.getAppHandoff('robot-uuid-handoff', cfg, {
+    focusNodes: [{ name: '主流程', kind: 'visual', blockCount: 3 }],
+    taskNote: '只看主流程',
+  });
+  assert.strictEqual(appFocus.ok, true);
+  assert.ok(appFocus.markdown.includes('节点深读'));
+  assert.ok(appFocus.markdown.includes('主流程'));
+  assert.ok(appFocus.markdown.includes('只看主流程'));
+  assert.strictEqual(appFocus.focusCount, 1);
+
+  // includeCandidates：无 xbot 时 candidates 为空数组（不抛）
+  const withCand = workbench.getAppHandoff('robot-uuid-handoff', cfg, {
+    includeCandidates: true,
+  });
+  assert.strictEqual(withCand.ok, true);
+  assert.ok(Array.isArray(withCand.candidates));
 
   try {
     fs.rmSync(tmp, { recursive: true, force: true });

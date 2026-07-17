@@ -440,12 +440,34 @@ async function handleRequest(req, res, ctx) {
         return true;
       }
 
-      // S27a：应用开发交接提示词
+      // S27a：应用开发交接提示词（GET 瘦身默认；POST 可带 focusNodes / taskNote）
       const appHandoff = pathname.match(/^\/api\/apps\/([^/]+)\/handoff\/?$/);
-      if (method === 'GET' && appHandoff) {
+      if ((method === 'GET' || method === 'POST') && appHandoff) {
         const robotUuid = decodeURIComponent(appHandoff[1]);
+        let body = {};
+        if (method === 'POST') {
+          try {
+            const raw = await readBody(req);
+            if (raw) body = JSON.parse(raw);
+          } catch {
+            body = {};
+          }
+        }
+        const taskNote =
+          (body && body.taskNote) || url.searchParams.get('taskNote') || '';
+        const focusNodes =
+          body && Array.isArray(body.focusNodes)
+            ? body.focusNodes
+            : undefined;
+        const includeCandidates =
+          body && body.includeCandidates === true
+            ? true
+            : url.searchParams.get('includeCandidates') === '1' ||
+              url.searchParams.get('includeCandidates') === 'true';
         const result = workbench.getAppHandoff(robotUuid, cfg, {
-          taskNote: url.searchParams.get('taskNote') || '',
+          taskNote,
+          focusNodes,
+          includeCandidates,
         });
         sendJson(res, result.ok ? 200 : result.code === 'not_found' ? 404 : 400, result);
         return true;

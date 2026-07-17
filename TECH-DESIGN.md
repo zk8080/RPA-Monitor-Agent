@@ -874,6 +874,7 @@ maintain: {
 **终态：** `resolved` 不可再人工改为 snoozed/ignored；仅可「补充说明」或「恢复待处理」(→ open)。新 job / regressed 仍自动拉回 open。  
 
 **优先队列：** 有效 open（snoozed 过期算 open；resolved/ignored 不进）且 `lastFailureAt` 在 `workbench.priorityRecentDays`（默认 **1=滚动 24h**，0=不限）内。  
+**入列：** 近窗 open **一律入列**；强信号（未诊断/复发/跨应用/可预览/高频）高分排序；无强信号标 `recent_open`（近 24h，低分），避免优先区假空白。  
 
 **API：** `POST /api/findings/:fp/work-status` body `{ status, snoozeDays?, rootCause?, solution? }`  
 **实现：** `lib/work-status.js` + `memory.upsert` 合并 + 详情页按钮 / 弹层。
