@@ -875,6 +875,11 @@ maintain: {
 
 **优先队列：** 有效 open（snoozed 过期算 open；resolved/ignored 不进）且 `lastFailureAt` 在 `workbench.priorityRecentDays`（默认 **1=滚动 24h**，0=不限）内。  
 **入列：** 近窗 open **一律入列**；强信号（未诊断/复发/跨应用/可预览/高频）高分排序；无强信号标 `recent_open`（近 24h，低分），避免优先区假空白。  
+**应用业务标签（app-meta）：** `data/app-meta.json` 存应用 `tags` + 优先池 `priorityTags`。  
+- 应用详情打业务标签（PV / 招募 / 财务 …，可自定义）。  
+- 总览勾选 **优先池标签**：`priorityTags` 非空时只保留「应用 tags 与之有交集」的失败；空 = 全部应用。  
+- 列表可按业务标签筛选。  
+- API：`PUT /api/apps/:uuid/meta`（tags）、`PUT /api/settings/app-meta`（`priorityTags: string[]`）。  
 
 **API：** `POST /api/findings/:fp/work-status` body `{ status, snoozeDays?, rootCause?, solution? }`  
 **实现：** `lib/work-status.js` + `memory.upsert` 合并 + 详情页按钮 / 弹层。

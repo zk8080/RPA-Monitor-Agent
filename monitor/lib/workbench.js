@@ -17,6 +17,7 @@ const { mergeByErrorSignature } = require('./merge');
 const handoff = require('./handoff');
 const bucketLib = require('./bucket');
 const workStatusLib = require('./work-status');
+const appMeta = require('./app-meta');
 
 /** @type {{ at: number, apps: object, queueStats: Map } | null} */
 let memCache = null;
@@ -236,6 +237,7 @@ function crossFingerprintSet(groups) {
  * 可选 recentDays：lastFailureAt 在滚动窗口内（默认 1=24h；0=不限）
  * 排序：未诊断 > 复发 > 跨应用 > 可预览修 > 高频 > 近窗 open；同分按失败时间新→旧
  * 无强信号的 open 仍入列（reason=recent_open，低分），避免优先区假空白。
+ * priorityScope=tags 时仅保留业务标签命中 priorityTags 的应用。
  *
  * @param {object[]} queueItems
  * @param {{
@@ -246,6 +248,10 @@ function crossFingerprintSet(groups) {
  *   recentDays?: number,
  *   now?: string|Date,
  *   nameResolver?: (item: object) => { robotName?: string, taskName?: string },
+ *   priorityScope?: 'all'|'tags',
+ *   priorityTags?: string[],
+ *   metaMap?: Map<string, { watched?: boolean, tags?: string[] }>,
+ *   robotInPriority?: (robotUuid: string) => boolean,
  * }} [opts]
  * @returns {object[]}
  */
@@ -261,10 +267,26 @@ function buildPriorityQueue(queueItems, opts = {}) {
   const now = opts.now || new Date();
   const nameResolver =
     typeof opts.nameResolver === 'function' ? opts.nameResolver : () => ({});
+  const priorityTags = Array.isArray(opts.priorityTags) ? opts.priorityTags : [];
+  const priorityScope =
+    opts.priorityScope === 'tags' || priorityTags.length > 0 ? 'tags' : 'all';
+  const metaMap = opts.metaMap || new Map();
+  const robotInPriority =
+    typeof opts.robotInPriority === 'function'
+      ? opts.robotInPriority
+      : (rid) => {
+          if (priorityScope !== 'tags' || !priorityTags.length) return true;
+          const meta = rid ? metaMap.get(rid) : null;
+          return appMeta.appMatchesPriorityTags((meta && meta.tags) || [], priorityTags);
+        };
 
   const ranked = [];
   for (const it of queueItems || []) {
     if (!it || !it.fingerprint) continue;
+
+    // 业务标签优先池：只保留配置了的标签（如 PV / 财务）
+    const rid0 = it.robotUuid || '';
+    if (!robotInPriority(rid0)) continue;
 
     // S27d：非 open（含 snoozed 有效期 / ignored）不进优先
     if (
@@ -332,6 +354,8 @@ function buildPriorityQueue(queueItems, opts = {}) {
     const names = nameResolver(it) || {};
     const failAt = failureTimeOf(it);
     const ws = workStatusLib.resolveEffectiveWorkStatus(it, now);
+    const rid = it.robotUuid || '';
+    const meta = (rid && metaMap.get(rid)) || {};
     ranked.push({
       fingerprint: it.fingerprint,
       robotUuid: it.robotUuid || null,
@@ -356,6 +380,8 @@ function buildPriorityQueue(queueItems, opts = {}) {
       workStatus: ws.workStatus,
       workStatusLabel: ws.workStatusLabel,
       reopenedBy: ws.reopenedBy,
+      watched: meta.watched === true,
+      tags: Array.isArray(meta.tags) ? meta.tags.slice() : [],
       reasons,
       reasonLabels: reasons.map((r) => PRIORITY_LABELS[r] || r),
       primaryReason: reasons[0],
@@ -431,11 +457,18 @@ function buildOverview(cfg, state = {}) {
     patchIndex = new Map();
   }
   const wbCfg = getWorkbenchConfig(cfg);
+  const appMetaSummary = appMeta.getSummary(cfg.dataDir);
+  const metaMap = appMeta.robotMetaMap(cfg.dataDir);
+  const robotInPriority = appMeta.makePriorityRobotFilter(cfg.dataDir);
   const priorityQueue = buildPriorityQueue(queueItems, {
     limit: 10,
     crossFpSet: crossFingerprintSet(crossAppGroupsRaw),
     patchIndex,
     recentDays: wbCfg.priorityRecentDays,
+    priorityScope: appMetaSummary.priorityScope,
+    priorityTags: appMetaSummary.priorityTags,
+    metaMap,
+    robotInPriority,
     nameResolver: (it) => {
       const rid = it.robotUuid;
       const local = rid ? localByUuid.get(rid) : null;
@@ -509,8 +542,14 @@ function buildOverview(cfg, state = {}) {
         ignoredStillFailing,
       },
       priorityRecentDays: wbCfg.priorityRecentDays,
+      /** 优先范围：all=全部应用；tags=仅 priorityTags 命中的应用 */
+      priorityScope: appMetaSummary.priorityScope,
+      priorityTags: appMetaSummary.priorityTags || [],
+      priorityMatchedApps: appMetaSummary.matchedAppCount || 0,
     },
-    /** 优先处理的失败指纹（最多 10；仅 open + 近 N 天，默认 1=24h） */
+    /** 应用业务标签 / 优先池配置 */
+    appMeta: appMetaSummary,
+    /** 优先处理的失败指纹（最多 10；open + 近 N 天；可选仅关注应用） */
     priorityQueue,
     problemApps,
     crossAppGroups: crossAppGroups.map((g) => ({
@@ -645,11 +684,22 @@ function buildAppListRow(base, st, taskEntry) {
   };
 }
 
+function attachAppMetaFields(row, metaMap) {
+  if (!row) return row;
+  const id = row.robotUuid || '';
+  const m = (id && metaMap.get(id)) || null;
+  row.watched = !!(m && m.watched);
+  row.tags = m && Array.isArray(m.tags) ? m.tags.slice() : [];
+  return row;
+}
+
 function listAppsWithStats(cfg) {
   const bundle = getAppsBundle(cfg);
   const { scan, queueStats } = bundle;
   const taskIndex = memory.loadTaskIndex(cfg.dataDir);
   const byRobotTask = (taskIndex && taskIndex.byRobot) || {};
+  const metaMap = appMeta.robotMetaMap(cfg.dataDir);
+  const metaSummary = appMeta.getSummary(cfg.dataDir);
   const seen = new Set();
   const apps = [];
 
@@ -659,7 +709,7 @@ function listAppsWithStats(cfg) {
     const id = a && a.robotUuid ? String(a.robotUuid) : '';
     if (!id || seen.has(id)) continue;
     seen.add(id);
-    apps.push(buildAppListRow(a, queueStats.get(id), byRobotTask[id]));
+    apps.push(attachAppMetaFields(buildAppListRow(a, queueStats.get(id), byRobotTask[id]), metaMap));
   }
 
   // 2) queue 失败应用（本机未安装）
@@ -667,21 +717,24 @@ function listAppsWithStats(cfg) {
     if (!robotUuid || seen.has(robotUuid)) continue;
     seen.add(robotUuid);
     apps.push(
-      buildAppListRow(
-        {
-          robotUuid,
-          name: st.robotName || robotUuid,
-          description: '',
-          version: '',
-          startup: '',
-          robotType: '',
-          flowCount: 0,
-          packageMtime: null,
-          userId: null,
-          xbotDir: null,
-        },
-        st,
-        byRobotTask[robotUuid],
+      attachAppMetaFields(
+        buildAppListRow(
+          {
+            robotUuid,
+            name: st.robotName || robotUuid,
+            description: '',
+            version: '',
+            startup: '',
+            robotType: '',
+            flowCount: 0,
+            packageMtime: null,
+            userId: null,
+            xbotDir: null,
+          },
+          st,
+          byRobotTask[robotUuid],
+        ),
+        metaMap,
       ),
     );
   }
@@ -691,26 +744,33 @@ function listAppsWithStats(cfg) {
     if (!robotUuid || seen.has(robotUuid)) continue;
     seen.add(robotUuid);
     apps.push(
-      buildAppListRow(
-        {
-          robotUuid,
-          name: (te && te.robotName) || robotUuid,
-          description: '',
-          version: '',
-          startup: '',
-          robotType: '',
-          flowCount: 0,
-          packageMtime: null,
-          userId: null,
-          xbotDir: null,
-        },
-        queueStats.get(robotUuid),
-        te,
+      attachAppMetaFields(
+        buildAppListRow(
+          {
+            robotUuid,
+            name: (te && te.robotName) || robotUuid,
+            description: '',
+            version: '',
+            startup: '',
+            robotType: '',
+            flowCount: 0,
+            packageMtime: null,
+            userId: null,
+            xbotDir: null,
+          },
+          queueStats.get(robotUuid),
+          te,
+        ),
+        metaMap,
       ),
     );
   }
 
   apps.sort((a, b) => {
+    // 有业务标签的略靠前，便于归类
+    const at = (a.tags && a.tags.length) || 0;
+    const bt = (b.tags && b.tags.length) || 0;
+    if (!!bt !== !!at) return at ? -1 : 1;
     if (b.failureCount !== a.failureCount) return b.failureCount - a.failureCount;
     const an = a.taskName || a.name || '';
     const bn = b.taskName || b.name || '';
@@ -723,6 +783,10 @@ function listAppsWithStats(cfg) {
     userCount: scan.userCount,
     count: apps.length,
     localCount: (scan.apps || []).length,
+    priorityScope: metaSummary.priorityScope,
+    priorityTags: metaSummary.priorityTags || [],
+    tagCatalog: metaSummary.tagCatalog,
+    suggestedTags: metaSummary.suggestedTags || [],
     apps,
   };
 }
@@ -794,6 +858,8 @@ function getAppDetail(robotUuid, cfg, opts = {}) {
     (st && st.robotClientUuid) ||
     '';
 
+  const meta = appMeta.getRobotMeta(cfg.dataDir, robotUuid);
+
   return {
     ok: true,
     robotUuid,
@@ -816,7 +882,56 @@ function getAppDetail(robotUuid, cfg, opts = {}) {
     failures,
     patches,
     actionsEnabled: getWorkbenchConfig(cfg).actionsEnabled,
+    watched: meta.watched === true,
+    tags: meta.tags || [],
+    metaUpdatedAt: meta.updatedAt || null,
+    priorityScope: meta.priorityScope,
   };
+}
+
+/**
+ * 更新应用关注 / 标签
+ * @param {string} robotUuid
+ * @param {object} cfg
+ * @param {{ watched?: boolean, tags?: string[], addTags?: string[], removeTags?: string[] }} patch
+ */
+function setAppMeta(robotUuid, cfg, patch = {}) {
+  if (!robotUuid) {
+    return { ok: false, code: 'missing_robot', message: '缺少 robotUuid' };
+  }
+  const result = appMeta.updateRobotMeta(cfg.dataDir, robotUuid, patch);
+  if (result.ok) invalidateAppsCache();
+  return result;
+}
+
+/**
+ * 设置优先队列范围 / 优先池业务标签
+ * @param {object} cfg
+ * @param {string} [scope] all | tags
+ * @param {string[]} [priorityTags]
+ */
+function setPriorityScope(cfg, scope, priorityTags) {
+  const result = appMeta.setPriorityScope(cfg.dataDir, scope, priorityTags);
+  invalidateAppsCache();
+  return result;
+}
+
+/**
+ * 只更新优先池业务标签（空 = 全部应用）
+ * @param {object} cfg
+ * @param {string[]} tags
+ */
+function setPriorityTags(cfg, tags) {
+  const result = appMeta.setPriorityTags(cfg.dataDir, tags);
+  invalidateAppsCache();
+  return result;
+}
+
+/**
+ * @param {object} cfg
+ */
+function getAppMetaSummary(cfg) {
+  return { ok: true, ...appMeta.getSummary(cfg.dataDir) };
 }
 
 /**
@@ -1990,6 +2105,10 @@ module.exports = {
   buildOverview,
   listAppsWithStats,
   getAppDetail,
+  setAppMeta,
+  setPriorityScope,
+  setPriorityTags,
+  getAppMetaSummary,
   getAppUnderstand,
   getAppBusinessBrief,
   exportAppBusinessMarkdown,

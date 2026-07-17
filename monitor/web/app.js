@@ -3278,11 +3278,17 @@
     function renderPriorityList(filter) {
       const filtered = priority.filter((item) => matchBucketFilter(item, filter));
       if (!filtered.length) {
+        const pTags = q.priorityTags || (data.appMeta && data.appMeta.priorityTags) || [];
+        const tagMode = (q.priorityScope || data.appMeta?.priorityScope) === 'tags' || pTags.length > 0;
         return empty(
           filter === 'dev' ? '暂无可开发优先项' : '暂无优先项',
           filter === 'dev'
             ? '当前优先队列里没有代码/配置类失败（多为环境或调度）'
-            : '队列空，或条目均已诊断且无跨应用/复发/高频信号',
+            : tagMode
+              ? pTags.length
+                ? `优先池标签「${pTags.join('、')}」下，近窗没有待处理失败；可给应用打业务标签或调整池子`
+                : '已开启标签优先池但未选标签'
+              : '近窗内没有待处理失败，或均已稍后/处理完成/不再提醒',
           '<a class="btn sm" href="#/apps">浏览应用</a>',
         );
       }
@@ -3388,18 +3394,47 @@
         ? queueHintParts.join(' · ')
         : '当前无失败指纹';
 
-    const wsQ = q.workStatus || {};
-    const recentDays = q.priorityRecentDays != null ? q.priorityRecentDays : 1;
-    const windowHint =
-      recentDays === 0
-        ? '不限时间'
-        : recentDays === 1
-          ? '近 24 小时内'
-          : `近 ${recentDays} 天内`;
+    let priorityTags = Array.isArray(q.priorityTags)
+      ? q.priorityTags.slice()
+      : Array.isArray(data.appMeta && data.appMeta.priorityTags)
+        ? data.appMeta.priorityTags.slice()
+        : [];
+    const tagCatalog = Array.isArray(data.appMeta && data.appMeta.tagCatalog)
+      ? data.appMeta.tagCatalog
+      : [];
+    const suggestedTags = Array.isArray(data.appMeta && data.appMeta.suggestedTags)
+      ? data.appMeta.suggestedTags
+      : ['PV', '招募', '财务', '运营', '测试', '核心'];
+    // 池子可选标签 = 建议 + 目录 + 当前已选
+    const poolTagOptions = [];
+    const poolSeen = new Set();
+    for (const t of [...suggestedTags, ...tagCatalog, ...priorityTags]) {
+      const s = String(t || '').trim();
+      if (!s) continue;
+      const k = s.toLowerCase();
+      if (poolSeen.has(k)) continue;
+      poolSeen.add(k);
+      poolTagOptions.push(s);
+    }
     const priorityPanel = `
       <div class="panel mb panel-priority">
         <h2>优先处理 <span class="meta" id="priority-count">${countInPriority(priorityFilter)}</span><span class="meta faint"> / ${priority.length}</span></h2>
-        <p class="hint mb-sm">仅<strong>待处理(open)</strong>且失败${esc(windowHint)}的指纹；按未诊断 → 复发 → 跨应用 → 可预览修 → 高频排序，最多 10 条。稍后/处理完成/不再提醒的不进本列表。待处理 ${esc(wsQ.open ?? '—')} · 稍后 ${esc(wsQ.snoozed ?? 0)} · 已完成 ${esc(wsQ.resolved ?? 0)} · 不提醒 ${esc(wsQ.ignored ?? 0)}${wsQ.ignoredStillFailing ? `（忽略后仍失败 ${wsQ.ignoredStillFailing}）` : ''}。</p>
+        <div class="priority-pool-config mb-sm" id="priority-tag-pool" role="group" aria-label="优先池业务标签">
+          ${poolTagOptions
+            .map((t, i) => {
+              const on = priorityTags.some((x) => String(x).toLowerCase() === t.toLowerCase());
+              const id = `pool-tag-${i}`;
+              return `<label class="pool-check" for="${id}">
+                <input type="checkbox" id="${id}" data-pool-tag="${esc(t)}" ${on ? 'checked' : ''}/>
+                <span>${esc(t)}</span>
+              </label>`;
+            })
+            .join('')}
+          <label class="pool-check pool-check-all">
+            <input type="checkbox" data-pool-all ${priorityTags.length === 0 ? 'checked' : ''}/>
+            <span>全部</span>
+          </label>
+        </div>
         <div class="chip-row bucket-filters mb-sm" role="toolbar" aria-label="今日优先分流筛选">
           ${bucketChipDefs
             .map(
@@ -3590,6 +3625,54 @@
         }
       });
     });
+
+    // 优先池业务标签（checkbox，服务端持久化）
+    async function savePriorityTags(nextTags) {
+      content.querySelectorAll('#priority-tag-pool input').forEach((b) => {
+        b.disabled = true;
+      });
+      try {
+        const r = await api('/api/settings/app-meta', {
+          method: 'PUT',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ priorityTags: nextTags }),
+        });
+        if (!r.ok) {
+          toast(r.message || '保存失败');
+          content.querySelectorAll('#priority-tag-pool input').forEach((b) => {
+            b.disabled = false;
+          });
+          return;
+        }
+        await renderHome();
+      } catch (e) {
+        toast(e.message || '保存失败');
+        content.querySelectorAll('#priority-tag-pool input').forEach((b) => {
+          b.disabled = false;
+        });
+      }
+    }
+
+    content.querySelectorAll('[data-pool-tag]').forEach((box) => {
+      box.addEventListener('change', () => {
+        const next = [];
+        content.querySelectorAll('[data-pool-tag]').forEach((el) => {
+          if (el.checked) next.push(el.getAttribute('data-pool-tag') || '');
+        });
+        savePriorityTags(next.filter(Boolean));
+      });
+    });
+    const allBox = content.querySelector('[data-pool-all]');
+    if (allBox) {
+      allBox.addEventListener('change', () => {
+        if (allBox.checked) {
+          savePriorityTags([]);
+        } else if (!priorityTags.length) {
+          // 取消「全部」且当前无选：保持全部，避免空状态卡死
+          allBox.checked = true;
+        }
+      });
+    }
   }
 
   // ── Apps ──
@@ -3607,10 +3690,46 @@
 
     const apps = data.apps || [];
     const problemCount = apps.filter((a) => a.failureCount > 0).length;
+    const tagCatalog = Array.isArray(data.tagCatalog) ? data.tagCatalog : [];
+    const suggestedTags = Array.isArray(data.suggestedTags)
+      ? data.suggestedTags
+      : ['PV', '招募', '财务'];
+    const filterTags = [];
+    const ftSeen = new Set();
+    for (const t of [...suggestedTags, ...tagCatalog]) {
+      const s = String(t || '').trim();
+      if (!s) continue;
+      const k = s.toLowerCase();
+      if (ftSeen.has(k)) continue;
+      ftSeen.add(k);
+      filterTags.push(s);
+    }
+    let listScope = 'all'; // all | tag:xxx
+    try {
+      const saved = localStorage.getItem('rpa_wb_app_list_scope');
+      if (saved === 'all' || (saved && saved.startsWith('tag:'))) {
+        listScope = saved;
+      }
+    } catch {
+      // ignore
+    }
+
     content.innerHTML = `
       <div class="search">
-        <input type="search" id="app-filter" placeholder="搜索应用名、任务名、客户端或 UUID（按 / 聚焦）" autocomplete="off" aria-label="搜索应用" />
+        <input type="search" id="app-filter" placeholder="搜索应用名、任务名、业务标签或 UUID（按 / 聚焦）" autocomplete="off" aria-label="搜索应用" />
         <span class="count" id="app-count">${apps.length} · ${problemCount} 有失败</span>
+      </div>
+      <div class="chip-row mb-sm" role="toolbar" aria-label="按业务标签筛选">
+        <button type="button" class="chip app-scope-chip ${listScope === 'all' ? 'active' : ''}" data-app-scope="all">全部</button>
+        ${filterTags
+          .slice(0, 16)
+          .map((t) => {
+            const id = `tag:${t}`;
+            return `<button type="button" class="chip app-scope-chip ${
+              listScope === id ? 'active' : ''
+            }" data-app-scope="${esc(id)}">${esc(t)}</button>`;
+          })
+          .join('')}
       </div>
       <div class="panel">
         <div class="list" id="apps-list"></div>
@@ -3658,8 +3777,14 @@
     function paint(filter = '') {
       const q = filter.trim().toLowerCase();
       const rows = apps.filter((a) => {
+        if (listScope.startsWith('tag:')) {
+          const want = listScope.slice(4).toLowerCase();
+          const tags = Array.isArray(a.tags) ? a.tags : [];
+          if (!tags.some((t) => String(t).toLowerCase() === want)) return false;
+        }
         if (!q) return true;
         const taskBits = [a.taskName, ...(Array.isArray(a.taskNames) ? a.taskNames : [])];
+        const tagBits = Array.isArray(a.tags) ? a.tags : [];
         return [
           a.name,
           a.description,
@@ -3671,6 +3796,7 @@
           a.lastErrorType,
           a.lastFlowName,
           ...taskBits,
+          ...tagBits,
         ]
           .map((x) => String(x || '').toLowerCase())
           .some((s) => s.includes(q));
@@ -3678,13 +3804,17 @@
       if (countEl) {
         countEl.textContent = q
           ? `${rows.length} / ${apps.length}`
-          : `${apps.length} · ${problemCount} 有失败`;
+          : `${rows.length} · ${problemCount} 有失败`;
       }
 
       if (!rows.length) {
         listEl.innerHTML = empty(
           '没有匹配的应用',
-          q ? '' : '未扫到本机应用，且 queue 暂无失败应用',
+          listScope.startsWith('tag:')
+            ? '该业务标签下暂无应用，打开应用详情添加标签'
+            : q
+              ? ''
+              : '未扫到本机应用，且 queue 暂无失败应用',
         );
         return;
       }
@@ -3694,6 +3824,7 @@
           const href = `#/apps/${encodeURIComponent(a.robotUuid)}`;
           const { title, appLine, moreTasks } = appListTitles(a);
           const meta = appListMeta(a);
+          const tags = Array.isArray(a.tags) ? a.tags : [];
           return `<a class="list-item" href="${href}">
             <div class="item-main">
               <div class="item-title">${esc(title)}</div>
@@ -3707,6 +3838,13 @@
                     : ''
               }
               ${meta ? `<div class="item-sub faint">${esc(meta)}</div>` : ''}
+              ${
+                tags.length
+                  ? `<div class="item-sub tags-line">${tags
+                      .map((t) => `<span class="tag-chip">${esc(t)}</span>`)
+                      .join('')}</div>`
+                  : ''
+              }
             </div>
             <div class="item-side">
               <div class="badges">
@@ -3744,6 +3882,20 @@
 
     paint();
     filterEl.addEventListener('input', () => paint(filterEl.value));
+    content.querySelectorAll('[data-app-scope]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        listScope = btn.getAttribute('data-app-scope') || 'all';
+        try {
+          localStorage.setItem('rpa_wb_app_list_scope', listScope);
+        } catch {
+          // ignore
+        }
+        content.querySelectorAll('[data-app-scope]').forEach((b) => {
+          b.classList.toggle('active', b.getAttribute('data-app-scope') === listScope);
+        });
+        paint(filterEl.value);
+      });
+    });
     filterEl.focus();
   }
 
@@ -3874,8 +4026,51 @@
 
   function renderAppOverview(tabBody, detail, robotUuid) {
     const fails = detail.failures || [];
+    let tags = Array.isArray(detail.tags) ? detail.tags.slice() : [];
+    const suggested = ['PV', '招募', '财务', '运营', '测试', '核心'];
+
+    function tagsHtml() {
+      if (!tags.length) {
+        return '<span class="muted">暂无业务标签</span>';
+      }
+      return tags
+        .map(
+          (t) =>
+            `<span class="tag-chip removable" data-tag="${esc(t)}" title="点击移除">${esc(
+              t,
+            )} <span aria-hidden="true">×</span></span>`,
+        )
+        .join('');
+    }
+
+    function suggestHtml() {
+      return suggested
+        .filter((s) => !tags.some((t) => String(t).toLowerCase() === s.toLowerCase()))
+        .map(
+          (s) =>
+            `<button type="button" class="chip sm suggest-tag" data-suggest-tag="${esc(s)}">+ ${esc(
+              s,
+            )}</button>`,
+        )
+        .join('');
+    }
+
     tabBody.innerHTML = `
       <div class="stack">
+        <div class="panel panel-app-meta">
+          <div class="graph-bar">
+            <div>
+              <h2 style="margin:0">业务标签</h2>
+              <p class="hint" style="margin-top:4px">如 PV / 招募 / 财务。总览优先池可勾选这些标签，只看你维护的业务线。</p>
+            </div>
+          </div>
+          <div class="app-tags-row" id="app-tags-row">${tagsHtml()}</div>
+          <div class="chip-row mb-sm" id="app-tag-suggest">${suggestHtml()}</div>
+          <div class="app-tag-add">
+            <input type="text" id="app-tag-input" class="input" maxlength="32" placeholder="自定义标签" autocomplete="off" />
+            <button type="button" class="btn sm" id="btn-app-tag-add">添加</button>
+          </div>
+        </div>
         <div class="panel">
           <h2>信息</h2>
           <div class="kv">
@@ -3927,6 +4122,85 @@
         </div>
       </div>
     `;
+
+    async function saveMeta(patch, okMsg) {
+      try {
+        const r = await api(`/api/apps/${encodeURIComponent(robotUuid)}/meta`, {
+          method: 'PUT',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(patch),
+        });
+        if (!r.ok) {
+          toast(r.message || '保存失败');
+          return null;
+        }
+        tags = Array.isArray(r.tags) ? r.tags.slice() : [];
+        detail.tags = tags;
+        if (okMsg) toast(okMsg);
+        return r;
+      } catch (e) {
+        toast(e.message || '保存失败');
+        return null;
+      }
+    }
+
+    function refreshTagsUi() {
+      const row = tabBody.querySelector('#app-tags-row');
+      if (row) row.innerHTML = tagsHtml();
+      const sug = tabBody.querySelector('#app-tag-suggest');
+      if (sug) sug.innerHTML = suggestHtml();
+      bindTagRemove();
+      bindSuggest();
+    }
+
+    function bindTagRemove() {
+      tabBody.querySelectorAll('.tag-chip.removable').forEach((el) => {
+        el.onclick = async (e) => {
+          e.preventDefault();
+          const t = el.getAttribute('data-tag');
+          if (!t) return;
+          const r = await saveMeta({ removeTags: [t] }, `已移除「${t}」`);
+          if (r) refreshTagsUi();
+        };
+      });
+    }
+
+    function bindSuggest() {
+      tabBody.querySelectorAll('[data-suggest-tag]').forEach((btn) => {
+        btn.onclick = async () => {
+          const t = btn.getAttribute('data-suggest-tag');
+          if (!t) return;
+          const r = await saveMeta({ addTags: [t] }, `已添加「${t}」`);
+          if (r) refreshTagsUi();
+        };
+      });
+    }
+
+    const addBtn = tabBody.querySelector('#btn-app-tag-add');
+    const tagInput = tabBody.querySelector('#app-tag-input');
+    const doAdd = async () => {
+      const t = tagInput ? String(tagInput.value || '').trim() : '';
+      if (!t) {
+        toast('请输入标签');
+        return;
+      }
+      const r = await saveMeta({ addTags: [t] }, `已添加「${t}」`);
+      if (r) {
+        if (tagInput) tagInput.value = '';
+        refreshTagsUi();
+      }
+    };
+    if (addBtn) addBtn.onclick = doAdd;
+    if (tagInput) {
+      tagInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          doAdd();
+        }
+      });
+    }
+    bindTagRemove();
+    bindSuggest();
   }
 
   function renderAppFailures(tabBody, detail) {

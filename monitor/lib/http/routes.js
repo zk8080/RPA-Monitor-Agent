@@ -293,6 +293,77 @@ async function handleRequest(req, res, ctx) {
         return true;
       }
 
+      // 应用关注/标签：优先池范围
+      if (method === 'GET' && pathname === '/api/settings/app-meta') {
+        sendJson(res, 200, workbench.getAppMetaSummary(cfg));
+        return true;
+      }
+      if (method === 'PUT' && pathname === '/api/settings/app-meta') {
+        let body = {};
+        try {
+          const raw = await readBody(req);
+          if (raw) body = JSON.parse(raw);
+        } catch {
+          body = {};
+        }
+        // 优先池业务标签（空数组 = 全部应用）
+        if (Array.isArray(body.priorityTags)) {
+          sendJson(res, 200, workbench.setPriorityTags(cfg, body.priorityTags));
+          return true;
+        }
+        if (body.priorityScope != null) {
+          sendJson(
+            res,
+            200,
+            workbench.setPriorityScope(
+              cfg,
+              body.priorityScope,
+              Array.isArray(body.priorityTags) ? body.priorityTags : undefined,
+            ),
+          );
+          return true;
+        }
+        sendJson(res, 400, {
+          ok: false,
+          code: 'bad_request',
+          message: '需要 priorityTags: string[] 或 priorityScope: all|tags',
+        });
+        return true;
+      }
+
+      const appMetaRoute = pathname.match(/^\/api\/apps\/([^/]+)\/meta\/?$/);
+      if (method === 'GET' && appMetaRoute) {
+        const robotUuid = decodeURIComponent(appMetaRoute[1]);
+        const summary = workbench.getAppMetaSummary(cfg);
+        const detail = workbench.getAppDetail(robotUuid, cfg);
+        if (!detail.ok) {
+          sendJson(res, 404, detail);
+          return true;
+        }
+        sendJson(res, 200, {
+          ok: true,
+          robotUuid,
+          watched: detail.watched === true,
+          tags: detail.tags || [],
+          metaUpdatedAt: detail.metaUpdatedAt || null,
+          priorityScope: summary.priorityScope,
+        });
+        return true;
+      }
+      if (method === 'PUT' && appMetaRoute) {
+        const robotUuid = decodeURIComponent(appMetaRoute[1]);
+        let body = {};
+        try {
+          const raw = await readBody(req);
+          if (raw) body = JSON.parse(raw);
+        } catch {
+          body = {};
+        }
+        const result = workbench.setAppMeta(robotUuid, cfg, body);
+        sendJson(res, result.ok ? 200 : 400, result);
+        return true;
+      }
+
       const appUnderstand = pathname.match(/^\/api\/apps\/([^/]+)\/understand\/?$/);
       if (method === 'GET' && appUnderstand) {
         const robotUuid = decodeURIComponent(appUnderstand[1]);

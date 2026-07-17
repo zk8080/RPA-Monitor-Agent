@@ -987,6 +987,108 @@ a.list-item:hover .item-go,
 }
 .badges { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
 
+.watch-star {
+  color: var(--warn, #b45309);
+  font-size: 0.9em;
+}
+.tag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 11px;
+  font-weight: 550;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text-2);
+  border: 1px solid var(--border);
+  line-height: 1.35;
+}
+.tag-chip.removable {
+  cursor: pointer;
+}
+.tag-chip.removable:hover {
+  border-color: var(--danger, #b91c1c);
+  color: var(--danger, #b91c1c);
+}
+.tags-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+.app-tags-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 10px 0 8px;
+  min-height: 28px;
+  align-items: center;
+}
+.app-tag-add {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.app-tag-add .input {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  font-size: var(--text-sm);
+  padding: 6px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  background: var(--surface-inset, var(--surface-2));
+  color: var(--text);
+}
+.app-tag-add .input:focus {
+  outline: none;
+  box-shadow: var(--focus);
+  border-color: var(--accent, #2563eb);
+}
+.priority-pool-config {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  align-items: center;
+  padding: 10px 12px;
+  margin-top: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface-inset, var(--surface-2));
+}
+.pool-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--text-sm);
+  font-weight: 550;
+  color: var(--text);
+  cursor: pointer;
+  user-select: none;
+  line-height: 1.3;
+}
+.pool-check input {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: var(--accent, #2563eb);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.pool-check-all {
+  margin-left: 4px;
+  padding-left: 12px;
+  border-left: 1px solid var(--border);
+  color: var(--text-2);
+  font-weight: 500;
+}
+.chip.sm,
+.chip.suggest-tag {
+  font-size: 11px;
+  padding: 2px 8px;
+}
+
 /* Search */
 .search {
   display: flex;
