@@ -10,6 +10,11 @@
   Starts via Windows Task Scheduler so the process is NOT a child of the
   current terminal. Closing the PowerShell / Cursor terminal will NOT kill it.
 
+  Triggers:
+    - At logon (user session)
+    - Daily 08:55 (if process died overnight, restart before reportCron 09:05;
+      if still alive, MultipleInstances=IgnoreNew skips duplicate)
+
   Logs: data\logs\service-yyyyMMdd.log (written by service.js)
   Single instance: data\service.pid
 #>
@@ -30,25 +35,12 @@ if (-not $Node) {
 }
 $NodePath = $Node.Source
 
-# Already running?
-if (Test-Path $PidFile) {
-  $old = (Get-Content $PidFile -Raw).Trim()
-  if ($old -match '^\d+$') {
-    $p = Get-Process -Id ([int]$old) -ErrorAction SilentlyContinue
-    if ($p) {
-      Write-Host "Already running pid=$old ($($p.ProcessName)). Stop first: deploy\windows\stop-service.ps1"
-      exit 1
-    }
-  }
-  Remove-Item $PidFile -Force -ErrorAction SilentlyContinue
-}
-
 $port = if ($env:HEALTH_PORT) { $env:HEALTH_PORT } else { '8787' }
 
 Write-Host "Root: $Root"
 Write-Host "Log:  $Log"
 Write-Host "HEALTH_PORT=$port"
-Write-Host "Starting via Task Scheduler ($TaskName) so terminal close is safe..."
+Write-Host "Registering Task Scheduler ($TaskName)..."
 
 # Task action = node directly (not powershell). Task Scheduler owns the process tree.
 $action = New-ScheduledTaskAction `
@@ -56,7 +48,7 @@ $action = New-ScheduledTaskAction `
   -Argument 'monitor/service.js' `
   -WorkingDirectory $Root
 
-# Unlimited run time; restart if node crashes
+# Unlimited run time; restart if node crashes; IgnoreNew if still alive
 $settings = New-ScheduledTaskSettingsSet `
   -AllowStartIfOnBatteries `
   -DontStopIfGoingOnBatteries `
@@ -66,8 +58,10 @@ $settings = New-ScheduledTaskSettingsSet `
   -ExecutionTimeLimit ([TimeSpan]::Zero) `
   -MultipleInstances IgnoreNew
 
-# At logon + on-demand Start-ScheduledTask
-$trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+# 1) 登录自启  2) 每天 08:55 兜底拉起（晨报 reportCron=09:05 前）
+$triggerLogon = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+$triggerMorning = New-ScheduledTaskTrigger -Daily -At '08:55'
+$triggers = @($triggerLogon, $triggerMorning)
 
 $principal = New-ScheduledTaskPrincipal `
   -UserId $env:USERNAME `
@@ -78,14 +72,32 @@ try {
   Register-ScheduledTask `
     -TaskName $TaskName `
     -Action $action `
-    -Trigger $trigger `
+    -Trigger $triggers `
     -Settings $settings `
     -Principal $principal `
-    -Description 'RPA Monitor & Diagnosis Agent Runtime (detached from terminal)' `
+    -Description 'RPA Monitor & Diagnosis Agent Runtime (logon + daily 08:55; detached from terminal)' `
     -Force | Out-Null
+  Write-Host "Task registered: logon + daily 08:55 (IgnoreNew if already running)"
 } catch {
   Write-Error "Register-ScheduledTask failed: $($_.Exception.Message). Try running PowerShell as the logged-in user (not a restricted context)."
 }
+
+# Already running? Keep process; task definition is already refreshed above.
+if (Test-Path $PidFile) {
+  $old = (Get-Content $PidFile -Raw).Trim()
+  if ($old -match '^\d+$') {
+    $p = Get-Process -Id ([int]$old) -ErrorAction SilentlyContinue
+    if ($p) {
+      Write-Host "Already running pid=$old ($($p.ProcessName)). Task triggers updated; not restarting."
+      Write-Host "Workbench: http://127.0.0.1:$port/"
+      Write-Host "Stop: powershell -File deploy\windows\stop-service.ps1"
+      exit 0
+    }
+  }
+  Remove-Item $PidFile -Force -ErrorAction SilentlyContinue
+}
+
+Write-Host "Starting via Task Scheduler..."
 
 # Ensure not left in Running state from a dead process
 try { Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue } catch {}
@@ -112,7 +124,7 @@ for ($i = 0; $i -lt 30; $i++) {
   } catch {}
 }
 
-$line = "[{0}] started via TaskScheduler task={1} pid={2} HEALTH_PORT={3}" -f (Get-Date).ToString('o'), $TaskName, $newPid, $port
+$line = "[{0}] started via TaskScheduler task={1} pid={2} HEALTH_PORT={3} triggers=logon+daily-08:55" -f (Get-Date).ToString('o'), $TaskName, $newPid, $port
 Add-Content -Path $Log -Value $line -Encoding utf8
 
 if ($ok) {

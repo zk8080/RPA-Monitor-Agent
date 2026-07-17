@@ -47,7 +47,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File deploy\windows\stop-service.
 
 **说明：**
 
-- `start-service.ps1` 会注册任务计划 **`RPA-Monitor-Agent`**（登录自启 + 立刻启动），action 为直接跑 `node monitor/service.js`（非 powershell 子进程）。  
+- `start-service.ps1` 会注册任务计划 **`RPA-Monitor-Agent`**（**登录自启 + 每天 08:55 兜底** + 立刻启动），action 为直接跑 `node monitor/service.js`（非 powershell 子进程）。  
+- **08:55 兜底：** 进程若中途挂掉，晨报 `reportCron`（默认 09:05）前再拉起一次；仍存活则 `IgnoreNew` 不双开。  
 - 日志：`data/logs/service-yyyyMMdd.log`（service 进程内追加）+ 启动记录。  
 - 单实例：`data/service.pid`；`stop-service.ps1` 先停任务再杀进程，避免 RestartCount 拉回。  
 - 感知翻页：`pollMaxPages`（默认 50）× `size`（默认 50）；**service 不再写死 3 页**。  
