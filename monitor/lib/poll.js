@@ -271,6 +271,7 @@ async function pollOnce(cfg, options = {}) {
           robotName: job.robotName || item.robotName || '',
           taskName: job.taskName || item.taskName || '',
           robotClientName: job.robotClientName || item.robotClientName || '',
+          robotClientUuid: job.robotClientUuid || item.robotClientUuid || '',
           status: job.status || '',
           fingerprint: fp.fingerprint || item.fingerprint || '',
           failureAt: failureAt || null,

@@ -42,6 +42,8 @@ const run1 = pollRuns.saveRun(dataDir, {
       robotUuid: 'r1',
       robotName: 'AppA',
       taskName: '任务A',
+      robotClientName: 'RPA01@corp',
+      robotClientUuid: 'client-uuid-1',
       fingerprint: 'fp-1',
       remark: '失败备注',
       flowName: '主流程',
@@ -59,6 +61,8 @@ assert.strictEqual(run1.jobCount, 1);
 assert.strictEqual(run1.logJobCount, 1);
 assert.strictEqual(run1.jobs[0].logCount, 2);
 assert.strictEqual(run1.jobs[0].logs[1].text, 'timeout');
+assert.strictEqual(run1.jobs[0].robotClientName, 'RPA01@corp');
+assert.strictEqual(run1.jobs[0].robotClientUuid, 'client-uuid-1');
 
 const run2 = pollRuns.saveRun(dataDir, {
   id: '20260715-020000-test',

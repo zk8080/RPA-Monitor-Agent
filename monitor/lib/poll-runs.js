@@ -97,6 +97,7 @@ function compactJobEntry(job, opts = {}) {
     robotName: job.robotName || '',
     taskName: job.taskName || '',
     robotClientName: job.robotClientName || '',
+    robotClientUuid: job.robotClientUuid || '',
     status: job.status || '',
     fingerprint: job.fingerprint || '',
     failureAt: job.failureAt || null,

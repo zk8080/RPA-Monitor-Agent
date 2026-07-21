@@ -2142,10 +2142,15 @@
                   else if (j.logSkipped) statusBits.push('未拉日志');
                   else statusBits.push(`${logs.length} 行`);
                   if (errCount) statusBits.push(`${errCount} 错误行`);
+                  // 影刀术语：应用 = robotName；机器人 = robotClientName（运行端）
+                  const appName = String(j.robotName || '').trim();
+                  const robotClient = String(j.robotClientName || '').trim();
+                  const taskName = String(j.taskName || '').trim();
                   const title =
-                    j.robotName || j.taskName || j.jobUuid || j.fingerprint || `job ${idx + 1}`;
+                    appName || taskName || robotClient || j.jobUuid || j.fingerprint || `job ${idx + 1}`;
                   const sub = [
-                    j.taskName && j.taskName !== j.robotName ? j.taskName : '',
+                    robotClient ? `机器人 ${robotClient}` : '',
+                    taskName && taskName !== appName ? taskName : '',
                     j.flowName || '',
                     j.errorType || '',
                     j.failureAt ? formatTime(j.failureAt) : '',
@@ -2181,14 +2186,30 @@
                   return `<details class="poll-job" ${idx === 0 ? 'open' : ''}>
                     <summary>
                       <span class="poll-job-title">${esc(title)}</span>
-                      <span class="poll-job-meta">${esc(statusBits.join(' · '))}</span>
+                      <span class="poll-job-meta">${esc(
+                        [robotClient ? `机器人 ${robotClient}` : '', ...statusBits]
+                          .filter(Boolean)
+                          .join(' · '),
+                      )}</span>
                     </summary>
                     <div class="poll-job-body">
                       ${sub ? `<p class="item-sub">${esc(sub)}</p>` : ''}
                       ${j.remark ? `<p class="poll-job-remark">${esc(j.remark)}</p>` : ''}
-                      <div class="meta mono-id mb">jobUuid: ${esc(j.jobUuid || '—')}${
-                        j.fingerprint ? ` · fp: ${esc(j.fingerprint)}` : ''
-                      }</div>
+                      <div class="kv mb">
+                        <div class="k">应用</div><div class="v">${esc(appName || '—')}</div>
+                        <div class="k">机器人</div><div class="v">${esc(robotClient || '—')}</div>
+                        ${
+                          taskName && taskName !== appName
+                            ? `<div class="k">任务</div><div class="v">${esc(taskName)}</div>`
+                            : ''
+                        }
+                        <div class="k">jobUuid</div><div class="v mono">${esc(j.jobUuid || '—')}</div>
+                        ${
+                          j.fingerprint
+                            ? `<div class="k">指纹</div><div class="v mono">${esc(j.fingerprint)}</div>`
+                            : ''
+                        }
+                      </div>
                       <div class="actions mb sm-actions">${fpLink}${appLink}</div>
                       ${logHtml}
                     </div>
