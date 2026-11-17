@@ -170,6 +170,11 @@ node -e "const c=require('./monitor/lib/config').loadConfig(); console.log(c.rpa
 | `pollLookbackHours` | 感知时间窗（小时） | 默认 **24** |
 | `pollMaxPages` | 时间窗内最多翻页（CLI **与 service 共用**） | 默认 **50**（约 50×size 条/轮上限） |
 | `shadowbotUserId` / `shadowbotUsersRoot` | 本机流程自动发现 | Windows 有客户端时可填 userId 固定账号 |
+| （文件）`data/settings.dingtalk.json` | 钉钉晨报（Web 设置页写入；含 secret，勿提交） | 需要晨报时配 webhook |
+| （文件）`data/settings.success-check.json` | 成功抽检覆盖（Web 设置页写入） | 可关 / 白名单 |
+| `softFail` | 成功抽检底稿（默认开：25/轮、5/应用、尾部 10 条） | 与失败补全共用 ~4.5/s 限流 |
+| `pollRunsMax` / `POLL_RUNS_MAX` | 日志档案保留轮数 | 默认 **50** |
+| `workbench` | 工作台开关（actions / settings / priorityRecentDays / handoff） | 默认开；只绑 `127.0.0.1` |
 | （兼容）`anthropicApiKey` | 旧字段，仍可读 | 建议迁到 llm* |
 
 
@@ -183,6 +188,8 @@ YD_ROBOT_CLIENT_UUID / YD_JOB_SIZE
 RPA_SKILL_PATH
 LLM_BASE_URL / LLM_API_KEY / LLM_MODEL / LLM_API_STYLE / LLM_TIMEOUT_MS
 POLL_LOOKBACK_HOURS / POLL_MAX_PAGES
+SOFT_FAIL / SOFT_FAIL_MAX_PER_POLL / YD_LOG_SEARCH_MIN_INTERVAL_MS
+POLL_RUNS_MAX
 HEALTH_PORT / DATA_DIR
 ```
 
@@ -205,8 +212,8 @@ curl -s http://127.0.0.1:8787/health
 | 提示 already_running | 看 `data/service.pid`；进程已死则删 pid 文件再启 |
 | 无新失败入队 | 查密钥、`robotClientUuid`、影刀侧是否有 error 运行 |
 | 诊断弱 / 无指令块 | 确认本机存在 ShadowBot `users\*\apps\<uuid>\xbot_robot`；或写 app-map；或接受纯日志诊断 |
-
-| 磁盘涨 | `data/queue`、`data/kb`、`data/reports` 按需归档（后期可加清理策略） |
+| 钉钉晨报没收到 | 设置页确认 enabled + webhook；同一本机日历日只发一次；boot 轮不推（等 reportCron / `--once`） |
+| 磁盘涨 | `data/queue`、`data/kb`、`data/reports` 按需归档；`data/poll-runs` 默认保留 50 轮、`data/cache` 可删 |
 
 日志：
 
@@ -223,9 +230,10 @@ curl -s http://127.0.0.1:8787/health
 │  服务器进程：node monitor/service.js      │  ← 部署单元
 │    Scheduler（确定性）                    │
 │      poll → queue / alerts               │
+│      soft-audit / poll-runs / task-index │
 │      diagnose skill（runner + tools）    │
-│      report → data/reports/              │
-│    GET /health（可选）                    │
+│      report → data/reports/ → 钉钉晨报   │
+│    GET /health + 本机工作台（127.0.0.1） │
 └─────────────────────────────────────────┘
          │                    │
     影刀 OpenAPI          rpa-skill（只读，可选）

@@ -163,6 +163,11 @@
 | `monitor/lib/tools.js` | **Tool 注册表**（name / schema / handler / 可见 skill） | 可与 runner 合并，但注册概念必须存在 |
 | `monitor/lib/agent-runner.js` | Skill 执行：playbook 或 tool-loop + 输出校验 | 具体 HTTP/读 flow 实现 |
 | `monitor/lib/skills/*`（可选） | 每 skill 的 prompt/playbook/可见 tool 列表 | 把 skill 逻辑写回入口 |
+| `monitor/lib/workbench.js` | 工作台聚合：总览 / 应用 / 失败 / 交接 / 设置读写（只读聚合 + 本机动作） | 第二套 OpenAPI 或诊断栈 |
+| `monitor/lib/http/*` | 本机 HTTP 薄路由、静态页、白名单打开路径 | 内联业务实现 |
+| `monitor/lib/{triage,bucket,work-status,handoff,verify,patch,merge}.js` | 分诊 / 噪声分流 / 处置态 / 交接包 / 验证闭环 / 补丁审计 / 跨应用归并 | 写进 skill 或前端重复实现 |
+| `monitor/lib/{poll-runs,soft-audit,morning-digest,notify-dingtalk,settings-*}.js` | 运行观测与消息面：日志档案 / 成功抽检 / 钉钉晨报 / 本机设置读写 | 在 service 内联推送或扫描 |
+| `monitor/web/*` | 零构建静态 UI（hash 路由） | 平行业务栈 / 直接读盘 |
 | `data/*` | Memory / State | 提交密钥或把 data 当代码 |
 
 > `tools.js` / `skills/` 可在实现时合并文件，但 **注册表 + skill 路由 + runner** 三个概念不可消灭。
@@ -179,6 +184,10 @@
 | `understand_flow` / `load_blocks` | rpa | diagnose, maintain |
 | `inspect_project` / `read_project_file` | rpa | maintain（及 diagnose 可用） |
 | `kb_search` / `kb_write` | kb | diagnose, maintain |
+| `queue_get` | memory | diagnose, maintain |
+| `list_app_failures` | memory | diagnose, maintain |
+| `scan_local_apps` | rpa | maintain, workbench |
+| `open_local_path` | http/open-path | workbench（仅 robotUuid，禁止任意路径） |
 | `render_report` | report | 调度 / 显式 skill 步骤 |
 
 
@@ -259,6 +268,13 @@ node monitor/report.js [--date YYYY-MM-DD]
 | `data/kb/KB-*.json` | 长期记忆：根因与方案 | diagnose（及人工确认流） |
 | `data/alerts/*` | 紧急旁路事件 | poll 规则 |
 | `data/reports/*` | 对外产出 | report / 调度 |
+| `data/patches/<patchId>/` | 补丁审计：before / proposed / meta | maintain fix |
+| `data/poll-runs/<id>.json` | 每轮 poll 的失败/抽检 job 日志档案（默认保留 50 轮） | poll |
+| `data/soft-audit.json` | 成功 job 抽检游标（jobUuid → clean/soft） | poll（soft-audit） |
+| `data/task-index.json` | robotUuid → 任务名 / 运行客户端索引（含成功 job） | poll |
+| `data/app-meta.json` | 应用业务标签 + 优先池标签 | workbench 设置 |
+| `data/settings.*.json` | 本机可写设置（llm / dingtalk / success-check / business-brief） | workbench 设置 |
+| `data/cache/*` | understand / business-brief 缓存（可删可重建） | workbench |
 | `data/app-map.json` | 可选：robotUuid → xbotDir 手工覆盖 | 默认由 ShadowBot 自动发现，非必须 |
 
 
@@ -280,7 +296,8 @@ node monitor/report.js [--date YYYY-MM-DD]
 | S11–S16 | maintain 巡检 + py 受控修 | ✅（默认不 auto-apply） |
 | S25 | 本机 Web 工作台 MVP | ✅ 总览/应用/understand/打开文件夹 |
 | S4 / S6 / S8 | 见 TECH-DESIGN | ✅ |
-| S10 / S17+ / S25b | 见 TECH-DESIGN §十五 backlog | 待做 |
+| S10a/b · S17–S20 · S25b · S26 · S27a/b/d | 见 TECH-DESIGN §十五 | ✅（S10c / S22 暂缓） |
+| 运行观测（无 S 编号） | 日志档案 / 成功抽检 / 任务名索引 / 钉钉晨报 | ✅ |
 
 
 
@@ -311,6 +328,8 @@ node monitor/report.js [--date YYYY-MM-DD]
 **推荐表述：**
 
 > 我们交付的是 **RPA 监听诊断与维护 Agent**：确定性感知运行失败并入队；diagnose skill 经 tools 调用 OpenAPI / rpa-skill / KB 输出结构化根因与分诊；maintain skill 提供结构巡检与 **受控 py 补丁**（默认预览、可回滚 apply）；同一 Runtime 可常驻，并预留 develop 扩展。
+>
+> 本机工作台是同一 Runtime 的观察 / 入口面：只读聚合 + 本机动作（打开目录 / 复制交接提示），**Web 永不 apply**；日志档案、成功抽检与钉钉晨报属于感知层与消息面增强，不改变「监听确定性、诊断走 Agent 面」。
 
 
 **避免表述：**
@@ -338,6 +357,9 @@ TECH-DESIGN 已有正确方向；落地时以本文为 **guardrail**，避免「
 |------|------|
 | 2026-07-11 | 初版：冻结 Agent 产品身份、硬边界、模块、skill、M1 两档、S3.5 检查点、宣讲口径 |
 | 2026-07-11 | maintain 已实现：更新 skill 表、CLI、H10、宣讲口径（playbook + 写盘闸门） |
+| 2026-07-14 | 工作台 S25/S25b、LLM 设置 S26、交接包 S27a、bucket S27b、workStatus S27d、app-meta 业务标签；§4/§7 扩充工作台与设置模块 |
+| 2026-09-14 | 运行观测与消息面：poll-runs 日志档案、soft-audit 成功抽检、task-index 任务名索引、钉钉晨报（一日一次）；§7 Memory 增补 |
+| 2026-11-16 | 文档对齐：§4 模块与 tool 清单、§7 Memory、§8 检查点、§10 宣讲口径补齐至当前实现 |
 
 
 ---

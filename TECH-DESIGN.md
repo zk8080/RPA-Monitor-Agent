@@ -302,7 +302,13 @@ diagnose 负责听懂失败并分诊；maintain 负责巡检与受控补丁（�
    e. 记入本轮 lastPollFindings[{ fingerprint, count, jobUuid, failureAt, ... }]
 5. 更新 cursor.json（时间窗 + lastScanned/lastFailed + lastPollFindings）
 6. S18：新 job 同指纹 → regressed；静默期满 → verified
+7. 成功 job 抽检（soft-audit）：仅新 jobUuid + 配额（每轮/每应用上限 + 可选白名单），
+   倒序取日志尾部 K 条；命中错误级 → queue `failureKind=soft`（与 hard 指纹隔离）
+8. 任务名索引：本轮全部 job（含成功）→ `data/task-index.json`（robotUuid → taskName / robotClientName）
+9. 日志档案：失败 job 与 soft 命中 job 的步骤日志 → `data/poll-runs/<id>.json`（默认保留 50 轮）
 ```
+
+> 观测类产物（7–9）同样**不调 AI**；与失败补全共用日志查询限流（约 4.5/s）。
 
 
 
@@ -351,15 +357,27 @@ RPA-Monitor-Agent/
 │   ├── verify_openapi.js
 │   ├── poll.js / agent.js / service.js / report.js
 │   ├── scan_shadowbot.js        # 本机 apps 扫描自检
-│   ├── test_fingerprint.js
+│   ├── test_*.js                # 各模块自检（含 workbench / maintain / 抽检 / 档案）
+│   ├── web/                     # 工作台静态 UI（零构建，hash 路由）
 │   └── lib/
 │       ├── config.js · yingdao.js · fingerprint.js · memory.js
 │       ├── poll.js · rpa.js · kb.js · llm.js · report.js
 │       ├── tools.js · agent-runner.js · lock.js · cron.js
-│       └── skills/diagnose.js   # M1-min playbook
+│       ├── triage.js · merge.js · bucket.js · work-status.js
+│       ├── patch.js · verify.js · fixers/*      # maintain 写盘闸门
+│       ├── handoff.js · business-brief.js · export-flow-doc.js
+│       ├── workbench.js · http/{server,routes,open-path}.js
+│       ├── poll-runs.js · soft-audit.js         # 日志档案 / 成功抽检
+│       ├── morning-digest.js · notify-dingtalk.js · settings-*.js
+│       ├── understand-cache.js
+│       └── skills/{diagnose,maintain}.js
 └── data/                        # gitignore · Memory
     ├── cursor.json              # 含 lastPollFindings
     ├── queue/ · kb/ · alerts/ · reports/
+    ├── patches/ · poll-runs/    # 补丁审计 / 每轮 job 日志档案
+    ├── soft-audit.json · task-index.json · app-meta.json
+    ├── settings.*.json          # 本机设置（llm / dingtalk / success-check / business-brief）
+    ├── cache/                   # understand / business-brief（可删可重建）
     └── app-map.json             # 可选手工覆盖（非必须）
 ```
 
@@ -458,6 +476,8 @@ node monitor/agent.js diagnose --queue --limit 5 --no-llm   # 纯规则
 - `--llm` 诊断启用 LLM（默认偏规则）  
 - `pollIntervalMinutes` 周期 poll + drain（poll 翻页上限 = **config.pollMaxPages**，与 CLI 一致）  
 - `diagnoseCron` / `reportCron` 简易分时触发  
+- 独立 **60s cron tick**（不绑 `pollIntervalMinutes`；进程在 cron 点后启动仍可补跑；同一日历日每点只跑一次）  
+- 晨报：`reportCron` 到点后 `lib/morning-digest.js` 推钉钉（`data/settings.dingtalk.json`）；**一日一次**；boot 只写日报不推；`--once` 推送；设置页「发送测试」可 force  
 - `healthPort` 默认 8787，仅 `127.0.0.1`（工作台 + `/health`）  
 - `data/service.pid` 单实例锁  
 - 进程日志：`data/logs/service-YYYYMMDD.log`；boot 失败不拖垮 HTTP  
@@ -646,12 +666,30 @@ module.exports = {
   reportCron: '5 9 * * *',
   healthPort: 8787,           // 0=关闭；仅绑定 127.0.0.1
   alertWebhook: '',
+
+  // 成功抽检（优先读 data/settings.success-check.json；设置页可改）
+  softFail: {
+    enabled: true, maxPerPoll: 25, maxPerAppPerPoll: 5,
+    tailSize: 10, sort: 'desc', minIntervalMs: 220, retainDays: 14,
+    // robotUuidAllowlist / robotUuidPriority
+  },
+
+  // 本机工作台（S25–S27）
+  workbench: {
+    enabled: true, actionsEnabled: true, settingsEnabled: true,
+    openFolderEnabled: true, understandCache: true,
+    priorityRecentDays: 1,          // 1=滚动 24h；0=不限
+    handoffIncludeDiagnose: false,  // 交接包默认不带诊断
+    // agents: { cursor: {...}, vscode: false, ... }
+  },
 };
 ```
 
 优先级：**环境变量 > config.local.js > 默认值**。  
 LLM 环境变量：`LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL` / `LLM_API_STYLE` / `LLM_TIMEOUT_MS`。  
-Poll：`POLL_LOOKBACK_HOURS` / `POLL_MAX_PAGES`。
+Poll：`POLL_LOOKBACK_HOURS` / `POLL_MAX_PAGES`。  
+抽检：`SOFT_FAIL` / `SOFT_FAIL_MAX_PER_POLL` / `YD_LOG_SEARCH_MIN_INTERVAL_MS`；日志档案：`POLL_RUNS_MAX`。  
+本机可写设置（Web，含密钥的仅存 `data/` 且 GET 脱敏）：`data/settings.llm.json` / `settings.dingtalk.json` / `settings.success-check.json` / `settings.business-brief.json`。
 
 
 ---
@@ -677,13 +715,15 @@ Poll：`POLL_LOOKBACK_HOURS` / `POLL_MAX_PAGES`。
 | **S7** ✅ | 队列消费 | `--queue --limit` | drain |
 | **S8** ✅ | report | 本轮 findings，无历史 occurrence 展示 | reports/*.md |
 | **S9** ✅ | service | 常驻 / --once / 锁 / health | 部署包装 |
-| **S10** | M3 产品增强 | 见 §十五路线图 | 待做 |
+| **S10** | M3 产品增强 | 见 §十五路线图 | 已交付 S10a/b（S10c 暂缓） |
 | **S11–S16** ✅ | maintain | 巡检 + py 受控修 | 已交付 |
+| **S17–S27** ✅ | 工作台与闸门增强 | 见 §十五 | 已交付（S21/S22 暂缓） |
+| **运行观测** ✅ | 日志档案 · 成功抽检 · 任务名索引 · 钉钉晨报 | `lib/poll-runs` / `soft-audit` / `morning-digest` | 工作台「日志档案」/「设置」 |
 
 ### 当前进度
 
-- **已交付：** S0–S9 最小闭环 + **S11–S16 maintain**（巡检 + py 受控修复）+ 部署  
-- **生产主路径：** `npm start` / `service.js`（监听+诊断+日报；**不**默认改代码）  
+- **已交付：** S0–S9 最小闭环 + **S11–S16 maintain**（巡检 + py 受控修复）+ 部署 + **S17–S27 工作台/闸门** + **运行观测与消息面**  
+- **生产主路径：** `npm start` / `service.js`（监听+诊断+日报+晨报；**不**默认改代码）  
 - **维护主路径：** `agent.js maintain inspect|fix|rollback`（Agent skill / playbook）  
 - **写盘：** `maintain.autoFix.enabled` 默认 false；需 `--apply` 且配置允许  
 - **设计详述：** [MAINTAIN-DESIGN.md](MAINTAIN-DESIGN.md)  
@@ -749,10 +789,10 @@ Poll：`POLL_LOOKBACK_HOURS` / `POLL_MAX_PAGES`。
 
 ---
 
-## 十五、继续实现路线图（待做 backlog）
+## 十五、继续实现路线图（已交付对照 + 剩余 backlog）
 
 > 原则：保持 playbook Agent + 写盘闸门；**service 永不默认 auto-apply 生产 py**。  
-> 推荐优先级 **P0 → P3**。
+> 已交付项保留编号便于追溯；⏸ 为暂缓；未标 ✅ 的才是待做。
 
 ### 15.1 优先级总表
 
@@ -770,6 +810,9 @@ Poll：`POLL_LOOKBACK_HOURS` / `POLL_MAX_PAGES`。
 | **P1** | **S27a** ✅ | **Coding Agent 瘦身交接包** | `lib/handoff.js` + `/api/findings/:fp/handoff` + `/api/apps/:uuid/handoff`；详情「复制提示」；诊断 opt-in | 默认短（路径+现象）；不含日志/全量档案；Web 不 apply；`test_handoff.js` |
 | **P1** | **S27b** ✅ | **失败噪声分流 bucket** | `lib/bucket.js`：env_robot / schedule / **element** / code / data_config / unknown；UI 三档筛选 | 元素≠代码；code 仅 py/变量类；`test_bucket.js` |
 | **P1** | **S27d** ✅ | **queue 处置态 workStatus** | open / snoozed / ignored / resolved；新 job 唤醒规则；优先队列仅 open + 近 24h；处理完成可选填原因/方案 | 不删 queue；regressed 强制 open；`test_work_status.js` |
+| **P1** | **运行观测** ✅ | 日志档案 + 成功抽检 + 任务名索引 | `lib/poll-runs.js` / `lib/soft-audit.js` / `memory.upsertTaskNamesFromJobs` | 工作台「日志档案」；设置页「成功抽检」；见 §15.3d |
+| **P1** | **消息面** ✅ | 钉钉晨报 | `lib/morning-digest.js` + `data/settings.dingtalk.json` | 一日一次；boot 不推；见 §15.3e |
+| **P2** | **工作台扩展** ✅ | 业务解读 / 流程导出 / 业务标签 | `lib/business-brief.js` / `lib/export-flow-doc.js` / `lib/app-meta.js` | 标注「模型推测」；见 §15.3f |
 | **P2** | **S10c** ⏸ | 分诊标签 `fixOwner` | business / developer / known | **暂缓**：业务侧尚无明确归属划分；规则易误导，待组织分工清晰后再做 |
 | **P2** | **S21** | 服务器流程源码策略 | 无 ShadowBot：共享盘 / app-map / 降级 | DEPLOY 专节 + 配置（当前无服务器需求可后置） |
 | **P2** | **S22** ⏸ | develop skill 骨架 | `agent.js develop` 路由 + playbook 占位 | **暂缓**：当前收益低于「工作台 → 复制路径 → Coding Agent」；真要生成流程再立项 |
@@ -884,6 +927,35 @@ maintain: {
 **API：** `POST /api/findings/:fp/work-status` body `{ status, snoozeDays?, rootCause?, solution? }`  
 **实现：** `lib/work-status.js` + `memory.upsert` 合并 + 详情页按钮 / 弹层。
 
+### 15.3d 运行观测：日志档案 / 成功抽检 / 任务名索引（已实现）
+
+**定位：** 感知层增强，**不调 AI、不改 queue 主键语义**。
+
+| 能力 | 行为 | 落盘 | 入口 |
+|------|------|------|------|
+| 日志档案 | 每轮 poll 存档失败 job 与 soft 命中 job 的步骤日志；每 job 截断 100 行；默认保留 50 轮 | `data/poll-runs/<id>.json` | 工作台「日志档案」；`/api/poll-runs` |
+| 成功抽检 | 成功 job（新 jobUuid + 配额）倒序取日志尾部 10 条；命中错误级 → queue `failureKind=soft`（与 hard 指纹隔离） | `data/soft-audit.json` | 设置页「成功抽检」；`softFail` 配置 |
+| 任务名索引 | 本轮全部 job（含成功）→ robotUuid 的任务名 / 运行客户端 | `data/task-index.json` | 工作台应用行 |
+
+**配额与限流：** 抽检每轮 25 个、每应用 5 个；与失败补全共用约 4.5/s 的 `search_logs` 限流；可配白名单 / 优先应用。
+**配置：** `softFail` + `data/settings.success-check.json`（Web 可写）+ 环境变量 `SOFT_FAIL`。
+**实现：** `monitor/lib/soft-audit.js`、`monitor/lib/poll-runs.js`、`memory.upsertTaskNamesFromJobs`。
+
+### 15.3e 消息面：钉钉晨报（已实现）
+
+**定位：** reportCron 之后的对外摘要；与日报共用 queue / 优先队列数据，**不是**诊断推理面。
+
+- 配置：`data/settings.dingtalk.json`（`enabled` / `webhookUrl` / `secret` / `recentDays` / `topN` / `atMobiles` / `atAll` / `atAlways`；GET 脱敏）
+- 触发：reportCron 到点后发送；**同一本机日历日只发一次**；boot 轮只写日报不推送；`--once` 推送；设置页「发送测试」force 绕过
+- 内容：无异常也发（用于区分「真无失败」与「服务挂了」）；按 bucket / 优先队列组织
+- 实现：`lib/morning-digest.js` + `lib/notify-dingtalk.js` + 60s 独立 cron tick
+
+### 15.3f 业务解读与流程导出（已实现）
+
+- **业务解读（business-brief）：** 在 rpa-skill understand 结构摘要之上调用 LLM，生成业务向说明；结果标注「模型推测」，**不替代** understand；提示词可配 `data/settings.business-brief.json`；缓存 `data/cache/business-brief`；API `GET/POST /api/apps/:uuid/business-brief`
+- **流程导出：** 业务流程 / 实现流程 Markdown（`lib/export-flow-doc.js`；API `/api/apps/:uuid/export/{business,impl}`；前端另支持 PDF / PNG 渲染）
+- **应用业务标签：** `data/app-meta.json`（tags + 优先池 priorityTags；见 §15.3c）
+
 ### 15.4 明确不做（除非单独立项）
 
 | 不做 | 原因 |
@@ -900,5 +972,5 @@ maintain: {
 
 ---
 
-*文档状态：S0–S9 + maintain + 工作台 S25/S25b/S26 + **S27a 交接包** + **S27b bucket 分流** 已交付；§十五为继续实现 backlog。*  
-*最后更新：2026-07-14*
+*文档状态：S0–S9 + maintain + 工作台 S25/S25b/S26 + S27a/b/d + app-meta + 运行观测（日志档案 / 成功抽检 / 任务名索引）+ 钉钉晨报 + 业务解读/流程导出 已交付；§十五为继续实现 backlog。*  
+*最后更新：2026-11-16（文档对齐当前实现）*

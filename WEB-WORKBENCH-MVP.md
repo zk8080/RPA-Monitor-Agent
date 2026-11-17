@@ -1,6 +1,7 @@
 # 本机开发者工作台 Web MVP — 实现计划
 
 > **状态：** ✅ MVP 已实现（2026-07-12）  
+> **后续演进：** MVP 之后已扩展 S25b 操作面 / S26 LLM 设置 / S27a 交接包 / S27b bucket / S27d workStatus / app-meta 业务标签 / 日志档案 / 钉钉晨报 / 业务解读与导出；**当前实现以 [TECH-DESIGN.md](TECH-DESIGN.md) §十五为准**，本文保留 MVP 冻结范围。  
 > **产品定位：** RPA Monitor & Diagnosis Agent 的本机观察面 / 操作入口（薄 Entrypoint）  
 > **不是：** 影刀二级运维 Dashboard / 带登录 SaaS / 独立业务栈  
 > **配套：** [TECH-DESIGN.md](TECH-DESIGN.md) §十五 · [ARCHITECTURE-FREEZE.md](ARCHITECTURE-FREEZE.md)

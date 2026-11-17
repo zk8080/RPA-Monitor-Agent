@@ -38,6 +38,12 @@
 | maintain | playbook skill：`inspect` / `fix`（默认 dry-run）/ `rollback` |
 | 写盘 | 仅 `maintain fix --apply` + autoFix 配置；**service 不自动改 py** |
 | report | 本轮 findings 条数，无历史 occurrence 展示 |
+| 成功抽检 | `lib/soft-audit.js`；成功 job 尾部日志命中 → queue `failureKind=soft`（与 hard 指纹隔离）；配额/白名单/限流见 `softFail` + 设置页；游标 `data/soft-audit.json` |
+| 日志档案 | `lib/poll-runs.js`；每轮 poll 存档失败/抽检 job 步骤日志 → `data/poll-runs`（默认 50 轮）；工作台「日志档案」 |
+| 任务名索引 | `memory.upsertTaskNamesFromJobs` → `data/task-index.json`（含成功 job） |
+| 钉钉晨报 | `lib/morning-digest.js` + `data/settings.dingtalk.json`；reportCron 后推送，一日一次，boot 不推 |
+| 业务解读/导出 | `lib/business-brief.js`（LLM，标注「模型推测」，提示词可配）；`lib/export-flow-doc.js`（Markdown 导出） |
+| 工作台设置 | `data/settings.{llm,dingtalk,success-check,business-brief}.json`；LLM 优先级 env > 文件 > config.local |
 | workbench | 失败时间 **绝对本地时间**；跨应用卡片不展示内部 errorSignature；**设置页**配 LLM；业务流程 **业务解读(LLM)**；**S27a 交接提示**（`lib/handoff` 瘦身；默认不含诊断）；**S27b bucket 分流**（可开发 vs 环境/调度） |
 | LLM | `lib/llm.js`；timeout 默认 600s；**env > data/settings.llm.json > config.local**；`diagnoseUseLlm` |
 | 形态 | **Agent skills + tools**；CLI/service 为触发方式，非「散装脚本身份」 |
@@ -71,7 +77,18 @@ D:\RPA-Monitor-Agent  消费：监听 OpenAPI + 诊断 Agent + 日报 / KB
    - `node monitor/test_bucket.js`
    - `node monitor/test_work_status.js`
    - `node monitor/test_queue_time.js`
-   - `node monitor/test_settings_llm.js`  
+   - `node monitor/test_settings_llm.js`
+   - `node monitor/test_auto_plan.js`
+   - `node monitor/test_verify.js`
+   - `node monitor/test_merge.js`
+   - `node monitor/test_p1_s20_s10a.js`
+   - `node monitor/test_cron.js`
+   - `node monitor/test_soft_audit.js`
+   - `node monitor/test_poll_runs.js`
+   - `node monitor/test_dingtalk.js`
+   - `node monitor/test_business_brief.js`
+   - `node monitor/test_app_meta.js`
+   - `node monitor/test_export_flow_doc.js`  
 
 
 4. 密钥：`config.local.js` gitignore  
@@ -97,6 +114,10 @@ D:\RPA-Monitor-Agent  消费：监听 OpenAPI + 诊断 Agent + 日报 / KB
   - **P2 ⏸ S10c** fixOwner：归属划分未明确，暂缓  
   - **P2 ⏸ S22** develop 骨架：不如直接 Coding Agent，暂缓  
   - ✅ **S26** 工作台配置 LLM（`data/settings.llm.json` + `/settings`）  
+  - ✅ **运行观测**：poll-runs 日志档案 / soft-audit 成功抽检 / task-index（含成功 job）  
+  - ✅ **消息面**：钉钉晨报（一日一次；boot 不推）+ 设置页  
+  - ✅ **业务解读与导出**：business-brief（模型推测标注）+ 业务流程/实现流程 Markdown  
+  - ✅ **app-meta 业务标签 / 优先池标签**  
 
   - **P3：** tool-loop / 对话入口（可选）  
   - **禁止：** service 默认 apply 生产 py；Web 复制平行业务栈  

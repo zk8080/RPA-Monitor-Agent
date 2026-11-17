@@ -23,11 +23,14 @@
 
 ```
 poll（最近 24h）→ queue + lastPollFindings
+  → 成功抽检 soft-audit → queue（failureKind=soft，与 hard 隔离）
+  → 任务名索引 task-index + 日志档案 poll-runs
   → diagnose skill（playbook）
        resolve_app（ShadowBot 自动 xbot_robot）
        → rpa-skill understand / load_blocks
        → 规则 ± LLM → fixClass 分诊 → KB
   → report（本轮失败条数，无历史 occurrence 展示）
+  → 钉钉晨报（reportCron，一日一次）
 
 maintain skill（同一 agent.js / runner，按需触发）
   → inspect：结构巡检报告（只读）
@@ -45,6 +48,7 @@ maintain skill（同一 agent.js / runner，按需触发）
 cp monitor/config.example.js monitor/config.local.js
 # 填影刀密钥；可选 llm*、maintain.autoFix
 # 配置 rpaSkillPath 指向本机 rpa-skill（只读）
+# LLM / 钉钉晨报 / 成功抽检可在启动后的「设置」页写入 data/settings.*.json
 ```
 
 **Windows · 本机安装 rpa-skill（方案 A）**
@@ -91,12 +95,15 @@ npm start
 
 | 页面 | 能力 |
 |------|------|
-| 总览 | 本机应用数、queue、runtime、问题应用 |
-| 应用列表 | ShadowBot 本机扫描 + 失败计数 |
-| 应用详情 | 流程 understand（rpa-skill）、打开文件夹、相关失败、**复制开发提示** |
-| 问题详情 | 诊断 / 预览修复、**复制瘦身修复提示**（可选含诊断）、打开 Coding Agent |
+| 总览 | 本机应用数、queue、runtime、问题应用、优先处理 |
+| 应用列表 | ShadowBot 本机扫描 + 失败计数 + 业务标签 |
+| 应用详情 | 流程 understand（rpa-skill）、业务解读（LLM）、导出、打开文件夹、相关失败、**复制开发提示** |
+| 问题详情 | 诊断 / 预览修复、**复制瘦身修复提示**（可选含诊断）、打开 Coding Agent、处置态 |
+| 日志档案 | 每轮 poll 的 job 步骤日志（失败 + 成功抽检命中） |
+| 日报 | `data/reports` 列表与 Markdown 渲染 |
+| 设置 | LLM / 钉钉晨报 / 成功抽检 / 业务解读提示词 |
 
-自检：`npm run test:workbench` · `npm run test:handoff`  
+自检：`npm run test:workbench` · `test:handoff` · `test:bucket` · `test:work-status` · `test:settings-llm` · `test:dingtalk` · `test:business-brief`  
 设计：[WEB-WORKBENCH-MVP.md](WEB-WORKBENCH-MVP.md) · 交接包见 [TECH-DESIGN.md](TECH-DESIGN.md) §15.3
 
 ## 当前进度
@@ -116,6 +123,9 @@ npm start
 | **S27a** Coding Agent 瘦身交接包 | ✅ `lib/handoff.js`；默认路径+现象；诊断 opt-in |
 | **S27b** 失败噪声分流 | ✅ `lib/bucket.js`；可开发 vs 环境/调度筛选 |
 | **S27d** 处置态 workStatus | ✅ open/snoozed/ignored/resolved；优先列表仅 open；处理完成可选填原因/方案；新 job 唤醒规则 |
+| **运行观测** | ✅ poll-runs 日志档案 · soft-audit 成功抽检 · task-index 任务名索引 |
+| **消息面** | ✅ 钉钉晨报（一日一次；设置页配置） |
+| **工作台扩展** | ✅ 业务解读（LLM）· 业务流程/实现流程导出 · app-meta 业务标签/优先池 |
 | S10c+ 后续 | 见下表 |
 | service 自动 apply | **永不默认** |
 
@@ -133,6 +143,10 @@ npm start
 | **P1** | **S10a** ✅ | KB-first（仅 confirmed） |
 | **P1** | **S25b** ✅ | 工作台操作面 |
 | **P2** | **S10b** ✅ | 跨应用归并（errorSignature） |
+| **P1** | **S26** ✅ | 工作台配置 LLM |
+| **P1** | **S27a/b/d** ✅ | 交接包 · bucket 分流 · workStatus |
+| **P1** | **运行观测** ✅ | 日志档案 · 成功抽检 · 任务名索引 · 钉钉晨报 |
+| **P2** | **工作台扩展** ✅ | 业务解读 · 流程导出 · app-meta 业务标签 |
 | **P2** | **S10c** ⏸ | fixOwner 分诊（归属未明确，暂缓） |
 | **P2** | **S21** | 服务器无 ShadowBot 时的源码策略（暂无需求） |
 | **P2** | **S22** ⏸ | develop skill 骨架（不如工作台 → Coding Agent，暂缓） |
